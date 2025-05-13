@@ -1,7 +1,12 @@
 const { Server } = require('socket.io');
 const http = require('http');
+const express = require('express');
+const cors = require('cors');
 
-const server = http.createServer();
+const app = express(); // Create an Express application (handles HTTP)
+app.use(cors());
+
+const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
@@ -296,7 +301,7 @@ io.on('connection', (socket) => {
 });
 
 // Add a basic HTTP GET route for the root path
-server.get('/', (req, res) => {
+app.get('/', (req, res) => {
   res.sendStatus(200); // Respond with a 200 OK status for health checks
 });
 
