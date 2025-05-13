@@ -295,6 +295,11 @@ io.on('connection', (socket) => {
   });
 });
 
+// Add a basic HTTP GET route for the root path
+app.get('/', (req, res) => {
+  res.sendStatus(200); // Respond with a 200 OK status for health checks
+});
+
 const PORT = process.env.PORT || 4001;
 server.listen(PORT, () => {
   console.log(`Signaling server running on port ${PORT}`);
