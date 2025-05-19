@@ -143,8 +143,7 @@ io.on('connection', (socket) => {
       console.log(`Creating new room: ${room}`);
       rooms.set(room, {
         players: [],
-        lastUpdated: Date.now(),
-        messages: []
+        lastUpdated: Date.now()
       });
     }
 
@@ -205,38 +204,27 @@ io.on('connection', (socket) => {
     console.log(`Chat from ${username} in ${room}:`, message);
     const roomInfo = rooms.get(room);
     if (roomInfo) {
-      // Store message in room history
-      const chatMessage = {
-        type: 'chat',
-        username,
-        message,
-        timestamp: Date.now()
-      };
-      roomInfo.messages = [...(roomInfo.messages || []), chatMessage].slice(-100);
+      // Remove message storage
+      // const chatMessage = {
+      //   type: 'chat',
+      //   username,
+      //   message,
+      //   timestamp: Date.now()
+      // };
+      // roomInfo.messages = [...(roomInfo.messages || []), chatMessage].slice(-100);
       
       // Broadcast to room
-      broadcastToRoom(room, 'chat', chatMessage);
+      broadcastToRoom(room, 'chat', { username, message });
     } else {
       console.warn(`Room ${room} not found for chat message`);
       // Create room if it doesn't exist
       console.log(`Creating room ${room} for chat message`);
       rooms.set(room, {
         players: [username],
-        lastUpdated: Date.now(),
-        messages: [{
-          type: 'chat',
-          username,
-          message,
-          timestamp: Date.now()
-        }]
+        lastUpdated: Date.now()
       });
       socket.join(room);
-      broadcastToRoom(room, 'chat', {
-        type: 'chat',
-        username,
-        message,
-        timestamp: Date.now()
-      });
+      broadcastToRoom(room, 'chat', { username, message });
     }
   });
 
@@ -245,38 +233,27 @@ io.on('connection', (socket) => {
     console.log(`Emote from ${username} in ${room}:`, emote);
     const roomInfo = rooms.get(room);
     if (roomInfo) {
-      // Store emote in room history
-      const emoteMessage = {
-        type: 'emote',
-        username,
-        emote,
-        timestamp: Date.now()
-      };
-      roomInfo.messages = [...(roomInfo.messages || []), emoteMessage].slice(-100);
+      // Remove emote storage
+      // const emoteMessage = {
+      //   type: 'emote',
+      //   username,
+      //   emote,
+      //   timestamp: Date.now()
+      // };
+      // roomInfo.messages = [...(roomInfo.messages || []), emoteMessage].slice(-100);
       
       // Broadcast to room
-      broadcastToRoom(room, 'emote', emoteMessage);
+      broadcastToRoom(room, 'emote', { username, emote });
     } else {
       console.warn(`Room ${room} not found for emote`);
       // Create room if it doesn't exist
       console.log(`Creating room ${room} for emote`);
       rooms.set(room, {
         players: [username],
-        lastUpdated: Date.now(),
-        messages: [{
-          type: 'emote',
-          username,
-          emote,
-          timestamp: Date.now()
-        }]
+        lastUpdated: Date.now()
       });
       socket.join(room);
-      broadcastToRoom(room, 'emote', {
-        type: 'emote',
-        username,
-        emote,
-        timestamp: Date.now()
-      });
+      broadcastToRoom(room, 'emote', { username, emote });
     }
   });
 
