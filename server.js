@@ -160,13 +160,14 @@ io.on('connection', (socket) => {
     }
 
     // Send recent messages to the new player
-    if (roomInfo.messages && roomInfo.messages.length > 0) {
-      console.log(`Sending ${roomInfo.messages.length} messages to ${username}`);
-      socket.emit('messageHistory', {
-        room,
-        messages: roomInfo.messages.slice(-50)
-      });
-    }
+    // We don't need to send messages to the new player as we don't store them.
+    // if (roomInfo.messages && roomInfo.messages.length > 0) {
+    //   console.log(`Sending ${roomInfo.messages.length} messages to ${username}`);
+    //   socket.emit('messageHistory', {
+    //     room,
+    //     messages: roomInfo.messages.slice(-50)
+    //   });
+    // }
 
     // Broadcast room update to all players in the room
     broadcastToRoom(room, 'roomUpdate', {
