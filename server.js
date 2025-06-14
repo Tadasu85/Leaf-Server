@@ -18,7 +18,7 @@ const io = new Server(server, {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  transports: ['websocket'], // Only use WebSocket
+  transports: process.env.NODE_ENV === 'test' ? ['websocket', 'polling'] : ['websocket'], // Use both transports in test, only WebSocket in production
   pingTimeout: 30000, // Reduced timeout
   pingInterval: 15000, // Reduced interval
   connectTimeout: 20000,
@@ -501,16 +501,6 @@ io.on('connection', (socket) => {
     socket.emit('buildQueueStatus', queueStatus);
   });
 
-  // Helper to broadcast to builders
-  const broadcastToBuilders = (event, data) => {
-    io.sockets.sockets.forEach(socket => {
-      const socketUsername = socketToUser.get(socket.id);
-      if (socketUsername === config.game.accountName) {
-        socket.emit(event, data);
-      }
-    });
-  };
-
   // Handle disconnection
   socket.on('disconnect', () => {
     const username = socketToUser.get(socket.id);
@@ -547,39 +537,13 @@ app.get('/', (req, res) => {
   res.sendStatus(200); // Respond with a 200 OK status for health checks
 });
 
-// Export cleanup function
-const cleanup = () => {
-  return new Promise((resolve) => {
-    // Close all socket connections
-    io.sockets.sockets.forEach(socket => {
-      socket.disconnect(true);
-    });
-    
-    // Clear all data structures
-    rooms.clear();
-    connectedUsers.clear();
-    socketToUser.clear();
-    roomBuildQueue.clear();
-    
-    // Close the server
-    server.close(() => {
-      io.close(() => {
-        resolve();
-      });
-    });
-  });
-};
+const PORT = process.env.PORT || 4001;
 
-// Only start the server if this file is run directly
-if (require.main === module) {
-  const PORT = process.env.PORT || 4001;
+// Only start the server if not in test environment
+if (process.env.NODE_ENV !== 'test') {
   server.listen(PORT, () => {
     log(`Signaling server running on port ${PORT}`);
   });
 }
 
-module.exports = {
-  server,
-  io,
-  cleanup
-};
+module.exports = { server, io };
