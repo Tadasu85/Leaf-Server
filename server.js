@@ -547,7 +547,39 @@ app.get('/', (req, res) => {
   res.sendStatus(200); // Respond with a 200 OK status for health checks
 });
 
-const PORT = process.env.PORT || 4001;
-server.listen(PORT, () => {
-  log(`Signaling server running on port ${PORT}`);
-});
+// Export cleanup function
+const cleanup = () => {
+  return new Promise((resolve) => {
+    // Close all socket connections
+    io.sockets.sockets.forEach(socket => {
+      socket.disconnect(true);
+    });
+    
+    // Clear all data structures
+    rooms.clear();
+    connectedUsers.clear();
+    socketToUser.clear();
+    roomBuildQueue.clear();
+    
+    // Close the server
+    server.close(() => {
+      io.close(() => {
+        resolve();
+      });
+    });
+  });
+};
+
+// Only start the server if this file is run directly
+if (require.main === module) {
+  const PORT = process.env.PORT || 4001;
+  server.listen(PORT, () => {
+    log(`Signaling server running on port ${PORT}`);
+  });
+}
+
+module.exports = {
+  server,
+  io,
+  cleanup
+};
