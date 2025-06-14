@@ -3,6 +3,12 @@ const http = require('http');
 const express = require('express');
 const cors = require('cors');
 
+// Helper function for timestamped logging
+const log = (...args) => {
+  const timestamp = new Date().toISOString();
+  console.log(`[${timestamp}]`, ...args);
+};
+
 const app = express(); // Create an Express application (handles HTTP)
 app.use(cors());
 
@@ -35,46 +41,46 @@ const getRoomId = (author, permlink) => `${author}/${permlink}`;
 
 // Helper to log queue status
 const logQueueStatus = () => {
-  console.log('\n=== Room Build Queue Status ===');
-  console.log(`Total items in queue: ${roomBuildQueue.size}`);
+  log('\n=== Room Build Queue Status ===');
+  log(`Total items in queue: ${roomBuildQueue.size}`);
   roomBuildQueue.forEach((item, id) => {
-    console.log(`\nQueue ID: ${id}`);
-    console.log(`Builder: ${item.username}`);
-    console.log(`From Room: ${item.room.author}/${item.room.permlink}`);
-    console.log(`New Room: ${item.newRoom.author}/${item.newRoom.permlink}`);
-    console.log(`Status: ${item.status}`);
-    console.log(`Timestamp: ${new Date(item.timestamp).toLocaleString()}`);
-    console.log('Exits:');
-    console.log('- From New Room:', item.exits.fromNewRoom);
-    console.log('- From Current Room:', item.exits.fromCurrentRoom);
-    console.log('------------------------');
+    log(`\nQueue ID: ${id}`);
+    log(`Builder: ${item.username}`);
+    log(`From Room: ${item.room.author}/${item.room.permlink}`);
+    log(`New Room: ${item.newRoom.author}/${item.newRoom.permlink}`);
+    log(`Status: ${item.status}`);
+    log(`Timestamp: ${new Date(item.timestamp).toLocaleString()}`);
+    log('Exits:');
+    log('- From New Room:', item.exits.fromNewRoom);
+    log('- From Current Room:', item.exits.fromCurrentRoom);
+    log('------------------------');
   });
-  console.log('===========================\n');
+  log('===========================\n');
 };
 
 // Helper to clean up empty rooms
 const cleanupRoom = (roomId) => {
   const room = rooms.get(roomId);
   if (room && room.players.length === 0) {
-    console.log(`Cleaning up empty room: ${roomId}`);
+    log(`Cleaning up empty room: ${roomId}`);
     rooms.delete(roomId);
   }
 };
 
 // Helper to broadcast to room
 const broadcastToRoom = (room, event, data) => {
-  console.log(`Broadcasting ${event} to room ${room}:`, data);
+  log(`Broadcasting ${event} to room ${room}:`, data);
   io.to(room).emit(event, data);
 };
 
 // Helper to handle user disconnection
 const handleUserDisconnect = (username, socket) => {
-  console.log(`Handling disconnect for user: ${username} (Socket ID: ${socket.id})`);
+  log(`Handling disconnect for user: ${username} (Socket ID: ${socket.id})`);
   
   // Only remove from tracking if this is the last socket for this user
   const currentSocketId = connectedUsers.get(username);
   if (currentSocketId === socket.id) {
-    console.log(`Removing user tracking for ${username}`);
+    log(`Removing user tracking for ${username}`);
     connectedUsers.delete(username);
   }
   socketToUser.delete(socket.id);
@@ -82,7 +88,7 @@ const handleUserDisconnect = (username, socket) => {
   // Remove from all rooms
   socket.rooms.forEach(room => {
     if (room !== socket.id) {
-      console.log(`Removing ${username} from room ${room} due to disconnect`);
+      log(`Removing ${username} from room ${room} due to disconnect`);
       const roomInfo = rooms.get(room);
       if (roomInfo) {
         roomInfo.players = roomInfo.players.filter(p => p !== username);
@@ -90,12 +96,44 @@ const handleUserDisconnect = (username, socket) => {
         
         // Broadcast room update to remaining players
         broadcastToRoom(room, 'roomUpdate', {
-          room,
-          players: roomInfo.players
+          ...roomInfo,
+          room
         });
       }
     }
   });
+};
+
+// Helper to log room state
+const logRoomState = (roomId, action) => {
+  const room = rooms.get(roomId);
+  log(`\n=== Room State (${action}) ===`);
+  log(`Room ID: ${roomId}`);
+  if (room) {
+    log(`Players: ${room.players.join(', ')}`);
+    log(`Last Updated: ${new Date(room.lastUpdated).toLocaleString()}`);
+    if (room.body) log(`Body: ${room.body.substring(0, 100)}...`);
+    if (room.title) log(`Title: ${room.title}`);
+    if (room.exits) log(`Exits: ${Object.keys(room.exits).join(', ')}`);
+    log('Full Room Data:', room);
+  } else {
+    log('Room not found');
+  }
+  log('===========================\n');
+};
+
+// Helper to log player state
+const logPlayerState = (username, action) => {
+  log(`\n=== Player State (${action}) ===`);
+  log(`Username: ${username}`);
+  log(`Socket ID: ${connectedUsers.get(username)}`);
+  const playerRooms = Array.from(socketToUser.entries())
+    .filter(([_, name]) => name === username)
+    .map(([socketId]) => Array.from(io.sockets.sockets.get(socketId)?.rooms || []))
+    .flat()
+    .filter(room => room !== connectedUsers.get(username));
+  log(`Current Rooms: ${playerRooms.join(', ')}`);
+  log('===========================\n');
 };
 
 // Helper to sync room state
@@ -110,26 +148,43 @@ const syncRoomState = (room) => {
         .map(socketId => socketToUser.get(socketId))
         .filter(Boolean);
 
+      // Ensure the room creator is in the players list
+      const roomCreator = room.split('/')[0];
+      if (!playersInRoom.includes(roomCreator)) {
+        playersInRoom.push(roomCreator);
+      }
+
+      log('Players in room:', playersInRoom);
+
       // Update room state
-      roomInfo.players = playersInRoom;
-      roomInfo.lastUpdated = Date.now();
-      rooms.set(room, roomInfo);
+      const updatedRoomInfo = {
+        ...roomInfo,
+        players: playersInRoom,
+        lastUpdated: Date.now()
+      };
+      rooms.set(room, updatedRoomInfo);
+
+      // Log room state change
+      logRoomState(room, 'sync');
 
       // Broadcast updated state to all players with consistent format
       broadcastToRoom(room, 'roomUpdate', {
-        room,
-        players: playersInRoom
+        ...updatedRoomInfo,
+        room
       });
+
+      return updatedRoomInfo;
     }
   }
+  return roomInfo;
 };
 
 io.on('connection', (socket) => {
   const username = socket.handshake.query.username;
-  console.log(`New connection attempt from: ${username} (Socket ID: ${socket.id})`);
+  log(`New connection attempt from: ${username} (Socket ID: ${socket.id})`);
   
   if (!username) {
-    console.error('Connection attempt without username');
+    log('Connection attempt without username');
     socket.disconnect();
     return;
   }
@@ -137,11 +192,11 @@ io.on('connection', (socket) => {
   // Check for existing connection
   const existingSocketId = connectedUsers.get(username);
   if (existingSocketId) {
-    console.log(`User ${username} already connected with socket ${existingSocketId}`);
+    log(`User ${username} already connected with socket ${existingSocketId}`);
     const existingSocket = io.sockets.sockets.get(existingSocketId);
     if (existingSocket) {
       // Instead of disconnecting, transfer the room data
-      console.log(`Transferring connection for ${username} from ${existingSocketId} to ${socket.id}`);
+      log(`Transferring connection for ${username} from ${existingSocketId} to ${socket.id}`);
       const rooms = Array.from(existingSocket.rooms).filter(r => r !== existingSocketId);
       rooms.forEach(room => {
         existingSocket.leave(room);
@@ -161,25 +216,25 @@ io.on('connection', (socket) => {
   // Store new connection
   connectedUsers.set(username, socket.id);
   socketToUser.set(socket.id, username);
-  console.log(`User connected: ${username} (Socket ID: ${socket.id})`);
+  log(`User connected: ${username} (Socket ID: ${socket.id})`);
 
   // Handle user registration
   socket.on('register', ({ username }, callback) => {
-    console.log(`User registration request from: ${username} (Socket ID: ${socket.id})`);
+    log(`User registration request from: ${username} (Socket ID: ${socket.id})`);
     if (username && socket.id) {
       // Update user tracking
       connectedUsers.set(username, socket.id);
       socketToUser.set(socket.id, username);
-      console.log(`User registered successfully: ${username}`);
+      log(`User registered successfully: ${username}`);
       
       // Ensure callback is called with success
       if (typeof callback === 'function') {
         callback({ success: true });
       } else {
-        console.error(`Registration callback not provided for user: ${username}`);
+        log(`Registration callback not provided for user: ${username}`);
       }
     } else {
-      console.error(`Registration failed for user: ${username}`);
+      log(`Registration failed for user: ${username}`);
       if (typeof callback === 'function') {
         callback({ success: false });
       }
@@ -188,121 +243,159 @@ io.on('connection', (socket) => {
 
   // Add getRoomState handler
   socket.on('getRoomState', ({ room }) => {
-    console.log(`${username} requesting state for room: ${room}`);
+    log(`${username} requesting state for room: ${room}`);
     const roomInfo = rooms.get(room);
     if (roomInfo) {
       // Sync room state before sending
-      syncRoomState(room);
+      const syncedRoomInfo = syncRoomState(room);
       socket.emit('roomState', {
-        room,
-        players: roomInfo.players
+        ...syncedRoomInfo,
+        room
       });
     } else {
       // If room doesn't exist, create it with current player
-      rooms.set(room, {
+      const newRoomInfo = {
         players: [username],
         lastUpdated: Date.now()
-      });
+      };
+      rooms.set(room, newRoomInfo);
       socket.emit('roomState', {
-        room,
-        players: [username]
+        ...newRoomInfo,
+        room
       });
     }
   });
 
-  // Handle room joins
-  socket.on('joinRoom', ({ room, username, roomData }) => {
-    console.log(`${username} joining room: ${room} (Socket ID: ${socket.id})`);
-    
-    // Leave previous room if any
-    if (socket.rooms.size > 1) {
-      const previousRoom = Array.from(socket.rooms).find(r => r !== socket.id);
-      if (previousRoom) {
-        console.log(`${username} leaving previous room: ${previousRoom}`);
-        socket.leave(previousRoom);
-        syncRoomState(previousRoom);
+  // Handle room joining
+  socket.on('joinRoom', (room) => {
+    try {
+      const username = socketToUser.get(socket.id);
+      if (!username) {
+        log('Error: Attempted to join room without username');
+        return;
       }
-    }
 
-    // Join new room
-    socket.join(room);
-    console.log(`${username} joined room: ${room}`);
-    
-    // Initialize or update room data
-    if (!rooms.has(room)) {
-      console.log(`Creating new room: ${room}`);
-      rooms.set(room, {
-        players: [username],
+      // Leave current room if any
+      if (socket.currentRoom) {
+        socket.leave(socket.currentRoom);
+        log(`${username} left room ${socket.currentRoom}`);
+      }
+
+      // Join new room
+      socket.join(room);
+      socket.currentRoom = room;
+      log(`${username} joined room ${room}`);
+
+      // Update room state
+      const roomInfo = rooms.get(room) || {
+        name: room,
+        players: [],
         lastUpdated: Date.now()
-      });
-    } else {
-      // Add player to existing room if not already present
-      const roomInfo = rooms.get(room);
+      };
+
+      // Add player to room if not already present
       if (!roomInfo.players.includes(username)) {
         roomInfo.players.push(username);
-        roomInfo.lastUpdated = Date.now();
-        rooms.set(room, roomInfo);
       }
+
+      // Update room state
+      rooms.set(room, roomInfo);
+
+      // Log room state change
+      logRoomState(room, 'join');
+
+      // Sync and broadcast room state
+      const updatedRoomInfo = syncRoomState(room);
+      if (updatedRoomInfo) {
+        // Send confirmation to the joining player
+        socket.emit('roomUpdate', {
+          ...updatedRoomInfo,
+          room
+        });
+      }
+    } catch (error) {
+      log('Error in joinRoom:', error);
     }
-
-    // Sync room state after join
-    syncRoomState(room);
-
-    // Send confirmation to the joining player with current room state
-    const currentRoomState = rooms.get(room);
-    socket.emit('roomJoined', {
-      room,
-      players: currentRoomState.players
-    });
-
-    // Notify all clients in the room about the new player
-    broadcastToRoom(room, 'playerJoined', {
-      room,
-      username,
-      players: currentRoomState.players
-    });
   });
 
   // Handle room leaves
   socket.on('leaveRoom', ({ username, room }) => {
-    console.log(`${username} leaving room: ${room}`);
+    log(`\n=== Room Leave Event ===`);
+    log(`Player: ${username}`);
+    log(`Room: ${room}`);
+    log(`Socket ID: ${socket.id}`);
+    
+    if (!room || !username) {
+      log('Invalid leave request - missing room or username');
+      return;
+    }
+    
     socket.leave(room);
-    syncRoomState(room);
+    
+    // Update room state and notify remaining players
+    const updatedRoomState = syncRoomState(room);
+    if (updatedRoomState) {
+      broadcastToRoom(room, 'playerLeft', {
+        username,
+        players: updatedRoomState.players,
+        room
+      });
+    }
+    
+    // Log player state after leave
+    logPlayerState(username, 'leave');
+    log('=== End Room Leave Event ===\n');
   });
 
   // Handle chat messages
   socket.on('chat', ({ room, message, username }) => {
-    console.log(`Chat from ${username} in ${room}:`, message);
+    if (!room || !username || !message) {
+      log('Invalid chat message - missing room, username, or message');
+      return;
+    }
+    log(`\n=== Chat Event ===`);
+    log(`Room: ${room}`);
+    log(`Player: ${username}`);
+    log(`Message: ${message}`);
+    log('=== End Chat Event ===\n');
     broadcastToRoom(room, 'chat', { username, message, room });
   });
 
   // Handle emotes
   socket.on('emote', ({ room, emote, username }) => {
-    console.log(`Emote from ${username} in ${room}:`, emote);
-    broadcastToRoom(room, 'emote', { username, emote });
+    if (!room || !username || !emote) {
+      log('Invalid emote - missing room, username, or emote');
+      return;
+    }
+    log(`\n=== Emote Event ===`);
+    log(`Room: ${room}`);
+    log(`Player: ${username}`);
+    log(`Emote: ${emote}`);
+    log('=== End Emote Event ===\n');
+    broadcastToRoom(room, 'emote', { username, emote, room });
   });
 
   // Handle WebRTC signaling
   socket.on('signal', ({ from, to, signal }) => {
-    console.log(`Signal from ${from} to ${to} (type: ${signal.type})`);
+    log(`Signal from ${from} to ${to} (type: ${signal.type})`);
     const targetSocketId = connectedUsers.get(to);
     if (targetSocketId) {
-      console.log(`Forwarding signal to ${to} (Socket ID: ${targetSocketId})`);
+      log(`Forwarding signal to ${to} (Socket ID: ${targetSocketId})`);
       io.to(targetSocketId).emit('signal', { from, signal });
     } else {
-      console.warn(`Target user ${to} not found for signal. Current users:`, Array.from(connectedUsers.entries()));
+      log(`Target user ${to} not found for signal. Current users:`, Array.from(connectedUsers.entries()));
     }
   });
 
   // Handle room build requests
   socket.on('queueRoomBuild', ({ room, newRoom, exits }, callback) => {
-    console.log('\n=== New Room Build Request ===');
-    console.log(`Builder: ${username}`);
-    console.log(`From Room: ${room.author}/${room.permlink}`);
-    console.log(`New Room: ${newRoom.author}/${newRoom.permlink}`);
-    console.log('Exits:');
-    console.log('- From New Room:', exits.fromNewRoom);
-    console.log('- From Current Room:', exits.fromCurrentRoom);
+    log('\n=== New Room Build Request ===');
+    log(`Builder: ${username}`);
+    log(`From Room: ${room.author}/${room.permlink}`);
+    log(`New Room: ${newRoom.author}/${newRoom.permlink}`);
+    log('Exits:');
+    log('- From New Room:', exits.fromNewRoom);
+    log('- From Current Room:', exits.fromCurrentRoom);
     
     // Add to queue
     const queueId = Date.now().toString();
@@ -326,13 +419,13 @@ io.on('connection', (socket) => {
 
   // Handle room build approvals
   socket.on('approveRoomBuild', ({ queueId }) => {
-    console.log('\n=== Room Build Approval ===');
-    console.log(`Queue ID: ${queueId}`);
+    log('\n=== Room Build Approval ===');
+    log(`Queue ID: ${queueId}`);
     
     const buildRequest = roomBuildQueue.get(queueId);
     if (buildRequest) {
-      console.log(`Approving build request from ${buildRequest.username}`);
-      console.log(`New Room: ${buildRequest.newRoom.author}/${buildRequest.newRoom.permlink}`);
+      log(`Approving build request from ${buildRequest.username}`);
+      log(`New Room: ${buildRequest.newRoom.author}/${buildRequest.newRoom.permlink}`);
       
       buildRequest.status = 'approved';
       roomBuildQueue.set(queueId, buildRequest);
@@ -350,20 +443,20 @@ io.on('connection', (socket) => {
         });
       }
     } else {
-      console.log(`Build request ${queueId} not found in queue`);
+      log(`Build request ${queueId} not found in queue`);
     }
   });
 
   // Handle room build rejections
   socket.on('rejectRoomBuild', ({ queueId, reason }) => {
-    console.log('\n=== Room Build Rejection ===');
-    console.log(`Queue ID: ${queueId}`);
-    console.log(`Reason: ${reason}`);
+    log('\n=== Room Build Rejection ===');
+    log(`Queue ID: ${queueId}`);
+    log(`Reason: ${reason}`);
     
     const buildRequest = roomBuildQueue.get(queueId);
     if (buildRequest) {
-      console.log(`Rejecting build request from ${buildRequest.username}`);
-      console.log(`New Room: ${buildRequest.newRoom.author}/${buildRequest.newRoom.permlink}`);
+      log(`Rejecting build request from ${buildRequest.username}`);
+      log(`New Room: ${buildRequest.newRoom.author}/${buildRequest.newRoom.permlink}`);
       
       buildRequest.status = 'rejected';
       buildRequest.rejectionReason = reason;
@@ -383,14 +476,14 @@ io.on('connection', (socket) => {
         });
       }
     } else {
-      console.log(`Build request ${queueId} not found in queue`);
+      log(`Build request ${queueId} not found in queue`);
     }
   });
 
   // Handle queue status requests
   socket.on('getBuildQueue', () => {
-    console.log('\n=== Queue Status Request ===');
-    console.log(`Requested by: ${username}`);
+    log('\n=== Queue Status Request ===');
+    log(`Requested by: ${username}`);
     logQueueStatus();
     
     // Send queue status with consistent format
@@ -422,7 +515,29 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const username = socketToUser.get(socket.id);
     if (username) {
+      log(`\n=== Disconnect Event ===`);
+      log(`Player: ${username}`);
+      log(`Socket ID: ${socket.id}`);
+      
+      // Get all rooms the user was in
+      const userRooms = Array.from(socket.rooms).filter(r => r !== socket.id);
+      
+      // Remove user from tracking
       handleUserDisconnect(username, socket);
+      
+      // Update state for each room the user was in
+      userRooms.forEach(room => {
+        const updatedRoomState = syncRoomState(room);
+        if (updatedRoomState) {
+          broadcastToRoom(room, 'playerLeft', {
+            username,
+            players: updatedRoomState.players,
+            room
+          });
+        }
+      });
+      
+      log('=== End Disconnect Event ===\n');
     }
   });
 });
@@ -434,5 +549,5 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 4001;
 server.listen(PORT, () => {
-  console.log(`Signaling server running on port ${PORT}`);
+  log(`Signaling server running on port ${PORT}`);
 });
