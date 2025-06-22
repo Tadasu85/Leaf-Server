@@ -10,20 +10,40 @@ const log = (...args) => {
 };
 
 const app = express(); // Create an Express application (handles HTTP)
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
+    : '*',
+  methods: ['GET', 'POST'],
+  credentials: true
+}));
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: process.env.NODE_ENV === 'production'
+      ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
+      : '*',
+    methods: ['GET', 'POST'],
+    credentials: true
   },
-  transports: process.env.NODE_ENV === 'test' ? ['websocket', 'polling'] : ['websocket'], // Use both transports in test, only WebSocket in production
-  pingTimeout: 30000, // Reduced timeout
-  pingInterval: 15000, // Reduced interval
-  connectTimeout: 20000,
+  transports: ['websocket', 'polling'], // Enable both transports for better reliability
+  pingTimeout: 30000, // Reduced timeout to 30 seconds
+  pingInterval: 10000, // Reduced interval to 10 seconds
+  connectTimeout: 20000, // Reduced timeout to 20 seconds
   allowUpgrades: true,
-  maxHttpBufferSize: 1e6 // Reduced buffer size
+  maxHttpBufferSize: 1e6, // 1MB buffer size
+  path: '/socket.io/' // Explicit path
+});
+
+// Add error handling for the server
+server.on('error', (error) => {
+  log('Server error:', error);
+});
+
+// Add error handling for the socket.io server
+io.engine.on('connection_error', (err) => {
+  log('Connection error:', err);
 });
 
 // Store room data - simplified structure
@@ -77,6 +97,9 @@ const broadcastToRoom = (room, event, data) => {
 const handleUserDisconnect = (username, socket) => {
   log(`Handling disconnect for user: ${username} (Socket ID: ${socket.id})`);
   
+  // Get all rooms the user was in before removing tracking
+  const userRooms = Array.from(socket.rooms).filter(r => r !== socket.id);
+  
   // Only remove from tracking if this is the last socket for this user
   const currentSocketId = connectedUsers.get(username);
   if (currentSocketId === socket.id) {
@@ -85,21 +108,24 @@ const handleUserDisconnect = (username, socket) => {
   }
   socketToUser.delete(socket.id);
   
-  // Remove from all rooms
-  socket.rooms.forEach(room => {
-    if (room !== socket.id) {
-      log(`Removing ${username} from room ${room} due to disconnect`);
-      const roomInfo = rooms.get(room);
-      if (roomInfo) {
-        roomInfo.players = roomInfo.players.filter(p => p !== username);
-        cleanupRoom(room);
-        
-        // Broadcast room update to remaining players
-        broadcastToRoom(room, 'roomUpdate', {
-          ...roomInfo,
-          room
-        });
-      }
+  // Remove from all rooms and update room states
+  userRooms.forEach(room => {
+    log(`Removing ${username} from room ${room} due to disconnect`);
+    const roomInfo = rooms.get(room);
+    if (roomInfo) {
+      // Update room state directly
+      roomInfo.players = roomInfo.players.filter(p => p !== username);
+      rooms.set(room, roomInfo);
+      
+      // Clean up empty rooms
+      cleanupRoom(room);
+      
+      // Broadcast room update to remaining players
+      broadcastToRoom(room, 'playerLeft', {
+        username,
+        players: roomInfo.players,
+        room
+      });
     }
   });
 };
@@ -148,18 +174,27 @@ const syncRoomState = (room) => {
         .map(socketId => socketToUser.get(socketId))
         .filter(Boolean);
 
-      // Ensure the room creator is in the players list
+      // Get room creator from room name
       const roomCreator = room.split('/')[0];
-      if (!playersInRoom.includes(roomCreator)) {
+      
+      // If room creator is not in the room but is still connected, add them back
+      if (!playersInRoom.includes(roomCreator) && connectedUsers.has(roomCreator)) {
+        log(`Adding room creator ${roomCreator} back to room ${room}`);
         playersInRoom.push(roomCreator);
       }
 
       log('Players in room:', playersInRoom);
 
-      // Update room state
+      // Update room state with all required fields
       const updatedRoomInfo = {
         ...roomInfo,
+        body: roomInfo.body || '',
+        title: roomInfo.title || room,
         players: playersInRoom,
+        details: roomInfo.details || {},
+        exits: roomInfo.exits || {},
+        author: roomInfo.author || roomCreator,
+        permlink: roomInfo.permlink || room,
         lastUpdated: Date.now()
       };
       rooms.set(room, updatedRoomInfo);
@@ -181,41 +216,45 @@ const syncRoomState = (room) => {
 
 io.on('connection', (socket) => {
   const username = socket.handshake.query.username;
-  log(`New connection attempt from: ${username} (Socket ID: ${socket.id})`);
-  
+  log(`\n=== New Connection ===`);
+  log(`Socket ID: ${socket.id}`);
+  log(`Username: ${username}`);
+  log(`Query params:`, socket.handshake.query);
+  log('=== End New Connection ===\n');
+
+  // Validate username is provided
   if (!username) {
-    log('Connection attempt without username');
+    log('Connection attempt without username - disconnecting');
     socket.disconnect();
     return;
   }
 
-  // Check for existing connection
+  // Add debugging for all events
+  socket.onAny((eventName, ...args) => {
+    log(`\n=== Incoming Event: ${eventName} ===`);
+    log(`Socket ID: ${socket.id}`);
+    log(`Username: ${username}`);
+    log(`Args:`, args);
+    log(`=== End Event: ${eventName} ===\n`);
+  });
+
+  // Store user mapping
+  connectedUsers.set(username, socket.id);
+  socketToUser.set(socket.id, username);
+  log(`User ${username} mapped to socket ${socket.id}`);
+
+  // Check for existing connection and handle gracefully
   const existingSocketId = connectedUsers.get(username);
-  if (existingSocketId) {
+  if (existingSocketId && existingSocketId !== socket.id) {
     log(`User ${username} already connected with socket ${existingSocketId}`);
     const existingSocket = io.sockets.sockets.get(existingSocketId);
     if (existingSocket) {
-      // Instead of disconnecting, transfer the room data
-      log(`Transferring connection for ${username} from ${existingSocketId} to ${socket.id}`);
-      const rooms = Array.from(existingSocket.rooms).filter(r => r !== existingSocketId);
-      rooms.forEach(room => {
-        existingSocket.leave(room);
-        socket.join(room);
-        // Sync room state after transfer
-        syncRoomState(room);
-      });
-      // Update the socket mapping
-      connectedUsers.set(username, socket.id);
-      socketToUser.set(socket.id, username);
+      log(`Disconnecting existing socket ${existingSocketId} for user ${username}`);
       socketToUser.delete(existingSocketId);
-      // Let the old socket disconnect naturally
       existingSocket.disconnect();
     }
   }
-
-  // Store new connection
-  connectedUsers.set(username, socket.id);
-  socketToUser.set(socket.id, username);
+  
   log(`User connected: ${username} (Socket ID: ${socket.id})`);
 
   // Handle user registration
@@ -243,22 +282,73 @@ io.on('connection', (socket) => {
 
   // Add getRoomState handler
   socket.on('getRoomState', ({ room }) => {
+    const username = socketToUser.get(socket.id);
+    if (!username) {
+      log('Error: Attempted to get room state without username');
+      return;
+    }
+    
     log(`${username} requesting state for room: ${room}`);
     const roomInfo = rooms.get(room);
     if (roomInfo) {
-      // Sync room state before sending
-      const syncedRoomInfo = syncRoomState(room);
+      // Get current room state without broadcasting to all players
+      const roomSockets = io.sockets.adapter.rooms.get(room);
+      let playersInRoom = [];
+      if (roomSockets) {
+        playersInRoom = Array.from(roomSockets)
+          .map(socketId => socketToUser.get(socketId))
+          .filter(Boolean);
+      }
+      
+      // Get room creator from room name
+      const roomCreator = room.split('/')[0];
+      
+      // If room creator is not in the room but is still connected, add them back
+      if (!playersInRoom.includes(roomCreator) && connectedUsers.has(roomCreator)) {
+        log(`Adding room creator ${roomCreator} back to room ${room}`);
+        playersInRoom.push(roomCreator);
+      }
+
+      // Create room state without broadcasting
+      const currentRoomInfo = {
+        ...roomInfo,
+        body: roomInfo.body || '',
+        title: roomInfo.title || room,
+        players: playersInRoom,
+        details: roomInfo.details || {},
+        exits: roomInfo.exits || {},
+        author: roomInfo.author || roomCreator,
+        permlink: roomInfo.permlink || room,
+        lastUpdated: Date.now()
+      };
+      
+      // Update room state without broadcasting
+      rooms.set(room, currentRoomInfo);
+      
+      // Send room state only to the requesting socket
       socket.emit('roomState', {
-        ...syncedRoomInfo,
+        ...currentRoomInfo,
         room
       });
     } else {
-      // If room doesn't exist, create it with current player
+      // If room doesn't exist, create it with current player and join the socket
       const newRoomInfo = {
+        body: '',
+        title: room,
         players: [username],
+        details: {},
+        exits: {},
+        author: room.split('/')[0],
+        permlink: room,
         lastUpdated: Date.now()
       };
       rooms.set(room, newRoomInfo);
+      
+      // Join the socket to the room
+      socket.join(room);
+      socket.currentRoom = room;
+      log(`${username} joined room ${room} via getRoomState`);
+      
       socket.emit('roomState', {
         ...newRoomInfo,
         room
@@ -286,10 +376,15 @@ io.on('connection', (socket) => {
       socket.currentRoom = room;
       log(`${username} joined room ${room}`);
 
-      // Update room state
+      // Update room state with all required fields
       const roomInfo = rooms.get(room) || {
-        name: room,
+        body: '',
+        title: room,
         players: [],
+        details: {},
+        exits: {},
+        author: room.split('/')[0],
+        permlink: room,
         lastUpdated: Date.now()
       };
 
@@ -304,15 +399,52 @@ io.on('connection', (socket) => {
       // Log room state change
       logRoomState(room, 'join');
 
-      // Sync and broadcast room state
-      const updatedRoomInfo = syncRoomState(room);
-      if (updatedRoomInfo) {
-        // Send confirmation to the joining player
-        socket.emit('roomUpdate', {
-          ...updatedRoomInfo,
-          room
-        });
+      // Calculate updated room state without broadcasting to all players
+      const roomSockets = io.sockets.adapter.rooms.get(room);
+      let playersInRoom = [];
+      if (roomSockets) {
+        playersInRoom = Array.from(roomSockets)
+          .map(socketId => socketToUser.get(socketId))
+          .filter(Boolean);
       }
+      
+      // Get room creator from room name
+      const roomCreator = room.split('/')[0];
+      
+      // If room creator is not in the room but is still connected, add them back
+      if (!playersInRoom.includes(roomCreator) && connectedUsers.has(roomCreator)) {
+        log(`Adding room creator ${roomCreator} back to room ${room}`);
+        playersInRoom.push(roomCreator);
+      }
+
+      // Create updated room info
+      const updatedRoomInfo = {
+        ...roomInfo,
+        body: roomInfo.body || '',
+        title: roomInfo.title || room,
+        players: playersInRoom,
+        details: roomInfo.details || {},
+        exits: roomInfo.exits || {},
+        author: roomInfo.author || roomCreator,
+        permlink: roomInfo.permlink || room,
+        lastUpdated: Date.now()
+      };
+      
+      // Update room state
+      rooms.set(room, updatedRoomInfo);
+
+      // Notify other players about the new player (but not the joining player)
+      socket.to(room).emit('playerJoined', {
+        username,
+        players: updatedRoomInfo.players,
+        room
+      });
+
+      // Send room state only to the joining player
+      socket.emit('roomUpdate', {
+        ...updatedRoomInfo,
+        room
+      });
     } catch (error) {
       log('Error in joinRoom:', error);
     }
@@ -331,6 +463,12 @@ io.on('connection', (socket) => {
     }
     
     socket.leave(room);
+    
+    // Clear the current room if it matches the room being left
+    if (socket.currentRoom === room) {
+      socket.currentRoom = null;
+      log(`${username} cleared current room tracking`);
+    }
     
     // Update room state and notify remaining players
     const updatedRoomState = syncRoomState(room);
@@ -509,23 +647,8 @@ io.on('connection', (socket) => {
       log(`Player: ${username}`);
       log(`Socket ID: ${socket.id}`);
       
-      // Get all rooms the user was in
-      const userRooms = Array.from(socket.rooms).filter(r => r !== socket.id);
-      
-      // Remove user from tracking
+      // Remove user from tracking and handle room cleanup
       handleUserDisconnect(username, socket);
-      
-      // Update state for each room the user was in
-      userRooms.forEach(room => {
-        const updatedRoomState = syncRoomState(room);
-        if (updatedRoomState) {
-          broadcastToRoom(room, 'playerLeft', {
-            username,
-            players: updatedRoomState.players,
-            room
-          });
-        }
-      });
       
       log('=== End Disconnect Event ===\n');
     }
