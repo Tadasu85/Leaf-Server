@@ -39,7 +39,7 @@ const config = {
   /** WebSocket signaling server URL for real-time communication */
   signalingServer: process.env.REACT_APP_SIGNALING_SERVER || 
     (process.env.NODE_ENV === 'production' 
-      ? (process.env.REACT_APP_PRODUCTION_SIGNALING_SERVER || 'https://leaf-server-5lrq.onrender.com')
+      ? (process.env.REACT_APP_PRODUCTION_SIGNALING_SERVER || 'https://leaf-server-23ov.onrender.com')
       : 'http://localhost:4001'),
   /** Array of admin usernames with full access */
   admins: [process.env.REACT_APP_ACCOUNT_NAME || 'hive-109456'],
