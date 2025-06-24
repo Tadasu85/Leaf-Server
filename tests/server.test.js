@@ -110,14 +110,29 @@ beforeAll((done) => {
       io.to(room).emit('emote', { username, emote, room });
     });
 
-    socket.on('queueRoomBuild', ({ room, newRoom, exits }, callback) => {
-      if (callback) {
-        callback({ queueId: Date.now().toString() });
+    // Add handler for updateRoomData event
+    socket.on('updateRoomData', ({ room, roomData }) => {
+      console.log('Update room data event:', { username, room, roomData });
+      const existingRoom = rooms.get(room);
+      if (existingRoom) {
+        const updatedRoomInfo = {
+          ...existingRoom,
+          body: roomData.body || roomData.description || existingRoom.body,
+          title: roomData.title || existingRoom.title,
+          exits: roomData.exits || existingRoom.exits,
+          details: roomData.details || existingRoom.details,
+          author: roomData.author || existingRoom.author,
+          permlink: roomData.permlink || existingRoom.permlink,
+          lastUpdated: Date.now()
+        };
+        rooms.set(room, updatedRoomInfo);
+        
+        // Broadcast updated room data to all players in the room
+        io.to(room).emit('roomUpdate', {
+          ...updatedRoomInfo,
+          room
+        });
       }
-    });
-
-    socket.on('getBuildQueue', () => {
-      socket.emit('buildQueueStatus', []);
     });
   });
 
@@ -374,39 +389,199 @@ describe('Chat and Emote Tests', () => {
   });
 });
 
-describe('Room Build Queue Tests', () => {
+describe('Room Data Update Tests', () => {
+  let testSocket;
+  let observerSocket;
+
   beforeEach((done) => {
-    if (!clientSocket.connected) {
-      clientSocket.connect();
-    }
-    clientSocket.once('connect', () => {
-      clientSocket.emit('register', { username: 'testuser' }, () => {
-        done();
-      });
+    testSocket = new Client(`http://localhost:${serverPort}`, {
+      query: { username: 'testuser' },
+      transports: ['websocket', 'polling']
+    });
+
+    observerSocket = new Client(`http://localhost:${serverPort}`, {
+      query: { username: 'observer' },
+      transports: ['websocket', 'polling']
+    });
+
+    Promise.all([
+      new Promise((resolve) => {
+        testSocket.once('connect', () => {
+          testSocket.emit('register', { username: 'testuser' }, resolve);
+        });
+      }),
+      new Promise((resolve) => {
+        observerSocket.once('connect', () => {
+          observerSocket.emit('register', { username: 'observer' }, resolve);
+        });
+      })
+    ]).then(() => {
+      // Join both sockets to the same room
+      testSocket.emit('joinRoom', 'testroom');
+      observerSocket.emit('joinRoom', 'testroom');
+      
+      // Wait for both to receive room updates
+      let updatesReceived = 0;
+      const checkDone = () => {
+        updatesReceived++;
+        if (updatesReceived === 2) done();
+      };
+      
+      testSocket.once('roomUpdate', checkDone);
+      observerSocket.once('roomUpdate', checkDone);
     });
   });
 
-  test('should queue room build request', (done) => {
-    const buildRequest = {
-      room: { author: 'testuser', permlink: 'testroom' },
-      newRoom: { author: 'testuser', permlink: 'newroom' },
-      exits: {
-        fromNewRoom: ['north'],
-        fromCurrentRoom: ['south']
+  afterEach((done) => {
+    if (testSocket && testSocket.connected) {
+      testSocket.disconnect();
+    }
+    if (observerSocket && observerSocket.connected) {
+      observerSocket.disconnect();
+    }
+    done();
+  });
+
+  test('should update room data with blockchain content', (done) => {
+    const roomData = {
+      title: 'Updated Room Title',
+      body: 'Updated room description from blockchain',
+      exits: { north: 'northroom', south: 'southroom' },
+      author: 'testuser',
+      permlink: 'testroom',
+      details: {
+        'flock of gulls': 'White crested ocean birds flutter about.',
+        'herd animals': 'They seem to be some form of bovine.'
       }
     };
 
-    clientSocket.emit('queueRoomBuild', buildRequest, (response) => {
-      expect(response.queueId).toBeDefined();
+    // Set up observer to listen for room update
+    observerSocket.once('roomUpdate', (data) => {
+      expect(data.title).toBe(roomData.title);
+      expect(data.body).toBe(roomData.body);
+      expect(data.exits).toEqual(roomData.exits);
+      expect(data.author).toBe(roomData.author);
+      expect(data.permlink).toBe(roomData.permlink);
+      expect(data.details).toEqual(roomData.details);
+      expect(data.room).toBe('testroom');
       done();
+    });
+
+    // Send room data update
+    testSocket.emit('updateRoomData', {
+      room: 'testroom',
+      roomData: roomData
     });
   });
 
-  test('should get build queue status', (done) => {
-    clientSocket.once('buildQueueStatus', (data) => {
-      expect(Array.isArray(data)).toBe(true);
-      done();
+  test('should handle updateRoomData for non-existent room', (done) => {
+    const roomData = {
+      title: 'Non-existent Room',
+      body: 'This room does not exist',
+      details: {}
+    };
+
+    // Should not crash when updating non-existent room
+    testSocket.emit('updateRoomData', {
+      room: 'nonexistentroom',
+      roomData: roomData
     });
-    clientSocket.emit('getBuildQueue');
+
+    // Give it a moment to process, then check it didn't crash
+    setTimeout(() => {
+      expect(testSocket.connected).toBe(true);
+      done();
+    }, 100);
+  });
+
+  test('should merge room data with existing room state', (done) => {
+    // First, update with partial data
+    const partialData = {
+      title: 'Partial Title',
+      body: 'Partial description'
+    };
+
+    // Then update with complete data
+    const completeData = {
+      title: 'Complete Title',
+      body: 'Complete description',
+      exits: { east: 'eastroom' },
+      details: { 'test detail': 'test description' }
+    };
+
+    let updateCount = 0;
+    observerSocket.on('roomUpdate', (data) => {
+      updateCount++;
+      if (updateCount === 1) {
+        // First update should have partial data
+        expect(data.title).toBe(partialData.title);
+        expect(data.body).toBe(partialData.body);
+        
+        // Send second update
+        testSocket.emit('updateRoomData', {
+          room: 'testroom',
+          roomData: completeData
+        });
+      } else if (updateCount === 2) {
+        // Second update should have complete data
+        expect(data.title).toBe(completeData.title);
+        expect(data.body).toBe(completeData.body);
+        expect(data.exits).toEqual(completeData.exits);
+        expect(data.details).toEqual(completeData.details);
+        done();
+      }
+    });
+
+    // Send first update
+    testSocket.emit('updateRoomData', {
+      room: 'testroom',
+      roomData: partialData
+    });
+  });
+
+  test('should preserve existing room data when updating with partial data', (done) => {
+    // First, set up room with complete data
+    const initialData = {
+      title: 'Initial Title',
+      body: 'Initial description',
+      exits: { north: 'northroom' },
+      details: { 'initial detail': 'initial description' }
+    };
+
+    // Then update with only title
+    const partialUpdate = {
+      title: 'Updated Title'
+    };
+
+    let updateCount = 0;
+    observerSocket.on('roomUpdate', (data) => {
+      updateCount++;
+      if (updateCount === 1) {
+        // First update should have initial data
+        expect(data.title).toBe(initialData.title);
+        expect(data.body).toBe(initialData.body);
+        expect(data.exits).toEqual(initialData.exits);
+        expect(data.details).toEqual(initialData.details);
+        
+        // Send partial update
+        testSocket.emit('updateRoomData', {
+          room: 'testroom',
+          roomData: partialUpdate
+        });
+      } else if (updateCount === 2) {
+        // Second update should have updated title but preserved other data
+        expect(data.title).toBe(partialUpdate.title);
+        expect(data.body).toBe(initialData.body); // Preserved
+        expect(data.exits).toEqual(initialData.exits); // Preserved
+        expect(data.details).toEqual(initialData.details); // Preserved
+        done();
+      }
+    });
+
+    // Send initial data
+    testSocket.emit('updateRoomData', {
+      room: 'testroom',
+      roomData: initialData
+    });
   });
 }); 

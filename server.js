@@ -53,30 +53,8 @@ const rooms = new Map();
 const connectedUsers = new Map();
 const socketToUser = new Map();
 
-// Add room building queue
-const roomBuildQueue = new Map();
-
 // Helper to get room ID
 const getRoomId = (author, permlink) => `${author}/${permlink}`;
-
-// Helper to log queue status
-const logQueueStatus = () => {
-  log('\n=== Room Build Queue Status ===');
-  log(`Total items in queue: ${roomBuildQueue.size}`);
-  roomBuildQueue.forEach((item, id) => {
-    log(`\nQueue ID: ${id}`);
-    log(`Builder: ${item.username}`);
-    log(`From Room: ${item.room.author}/${item.room.permlink}`);
-    log(`New Room: ${item.newRoom.author}/${item.newRoom.permlink}`);
-    log(`Status: ${item.status}`);
-    log(`Timestamp: ${new Date(item.timestamp).toLocaleString()}`);
-    log('Exits:');
-    log('- From New Room:', item.exits.fromNewRoom);
-    log('- From Current Room:', item.exits.fromCurrentRoom);
-    log('------------------------');
-  });
-  log('===========================\n');
-};
 
 // Helper to clean up empty rooms
 const cleanupRoom = (roomId) => {
@@ -136,11 +114,14 @@ const logRoomState = (roomId, action) => {
   log(`\n=== Room State (${action}) ===`);
   log(`Room ID: ${roomId}`);
   if (room) {
-    log(`Players: ${room.players.join(', ')}`);
-    log(`Last Updated: ${new Date(room.lastUpdated).toLocaleString()}`);
-    if (room.body) log(`Body: ${room.body.substring(0, 100)}...`);
-    if (room.title) log(`Title: ${room.title}`);
-    if (room.exits) log(`Exits: ${Object.keys(room.exits).join(', ')}`);
+    log(`Author: ${room.author || 'Not set'}`);
+    log(`Permlink: ${room.permlink || 'Not set'}`);
+    log(`Title: ${room.title || 'Not set'}`);
+    log(`Body: ${room.body ? room.body.substring(0, 100) + '...' : 'Not set'}`);
+    log(`Players (${room.players ? room.players.length : 0}): ${room.players ? room.players.join(', ') : 'None'}`);
+    log(`Exits: ${room.exits ? Object.keys(room.exits).join(', ') : 'None'}`);
+    log(`Details: ${room.details ? JSON.stringify(room.details) : 'None'}`);
+    log(`Last Updated: ${room.lastUpdated ? new Date(room.lastUpdated).toLocaleString() : 'Not set'}`);
     log('Full Room Data:', room);
   } else {
     log('Room not found');
@@ -525,118 +506,46 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle room build requests
-  socket.on('queueRoomBuild', ({ room, newRoom, exits }, callback) => {
-    log('\n=== New Room Build Request ===');
-    log(`Builder: ${username}`);
-    log(`From Room: ${room.author}/${room.permlink}`);
-    log(`New Room: ${newRoom.author}/${newRoom.permlink}`);
-    log('Exits:');
-    log('- From New Room:', exits.fromNewRoom);
-    log('- From Current Room:', exits.fromCurrentRoom);
-    
-    // Add to queue
-    const queueId = Date.now().toString();
-    roomBuildQueue.set(queueId, {
-      username,
-      room,
-      newRoom,
-      exits,
-      timestamp: Date.now(),
-      status: 'pending'
-    });
-
-    // Log updated queue status
-    logQueueStatus();
-
-    // Send back the queue ID to the client
-    if (callback) {
-      callback({ queueId });
+  // Handle room data updates from blockchain
+  socket.on('updateRoomData', ({ room, roomData }) => {
+    const username = socketToUser.get(socket.id);
+    if (!username) {
+      log('Error: Attempted to update room data without username');
+      return;
     }
-  });
 
-  // Handle room build approvals
-  socket.on('approveRoomBuild', ({ queueId }) => {
-    log('\n=== Room Build Approval ===');
-    log(`Queue ID: ${queueId}`);
-    
-    const buildRequest = roomBuildQueue.get(queueId);
-    if (buildRequest) {
-      log(`Approving build request from ${buildRequest.username}`);
-      log(`New Room: ${buildRequest.newRoom.author}/${buildRequest.newRoom.permlink}`);
+    log(`\n=== Room Data Update ===`);
+    log(`Room: ${room}`);
+    log(`Updated by: ${username}`);
+    log(`Room Data:`, roomData);
+
+    const existingRoom = rooms.get(room);
+    if (existingRoom) {
+      // Update existing room with blockchain data
+      const updatedRoomInfo = {
+        ...existingRoom,
+        body: roomData.body || roomData.description || existingRoom.body,
+        title: roomData.title || existingRoom.title,
+        exits: roomData.exits || existingRoom.exits,
+        details: roomData.details || existingRoom.details,
+        author: roomData.author || existingRoom.author,
+        permlink: roomData.permlink || existingRoom.permlink,
+        lastUpdated: Date.now()
+      };
       
-      buildRequest.status = 'approved';
-      roomBuildQueue.set(queueId, buildRequest);
+      rooms.set(room, updatedRoomInfo);
+      log(`Updated room data for ${room}`);
+      logRoomState(room, 'blockchain-update');
       
-      // Log updated queue status
-      logQueueStatus();
-      
-      // Notify the builder with consistent format
-      const builderSocketId = connectedUsers.get(buildRequest.username);
-      if (builderSocketId) {
-        io.to(builderSocketId).emit('roomBuildApproved', { 
-          queueId,
-          room: buildRequest.room,
-          newRoom: buildRequest.newRoom
-        });
-      }
+      // Broadcast updated room data to all players in the room
+      broadcastToRoom(room, 'roomUpdate', {
+        ...updatedRoomInfo,
+        room
+      });
     } else {
-      log(`Build request ${queueId} not found in queue`);
+      log(`Room ${room} not found, cannot update data`);
     }
-  });
-
-  // Handle room build rejections
-  socket.on('rejectRoomBuild', ({ queueId, reason }) => {
-    log('\n=== Room Build Rejection ===');
-    log(`Queue ID: ${queueId}`);
-    log(`Reason: ${reason}`);
-    
-    const buildRequest = roomBuildQueue.get(queueId);
-    if (buildRequest) {
-      log(`Rejecting build request from ${buildRequest.username}`);
-      log(`New Room: ${buildRequest.newRoom.author}/${buildRequest.newRoom.permlink}`);
-      
-      buildRequest.status = 'rejected';
-      buildRequest.rejectionReason = reason;
-      roomBuildQueue.set(queueId, buildRequest);
-      
-      // Log updated queue status
-      logQueueStatus();
-      
-      // Notify the builder with consistent format
-      const builderSocketId = connectedUsers.get(buildRequest.username);
-      if (builderSocketId) {
-        io.to(builderSocketId).emit('roomBuildRejected', { 
-          queueId,
-          reason,
-          room: buildRequest.room,
-          newRoom: buildRequest.newRoom
-        });
-      }
-    } else {
-      log(`Build request ${queueId} not found in queue`);
-    }
-  });
-
-  // Handle queue status requests
-  socket.on('getBuildQueue', () => {
-    log('\n=== Queue Status Request ===');
-    log(`Requested by: ${username}`);
-    logQueueStatus();
-    
-    // Send queue status with consistent format
-    const queueStatus = Array.from(roomBuildQueue.entries()).map(([id, request]) => ({
-      id,
-      username: request.username,
-      room: request.room,
-      newRoom: request.newRoom,
-      status: request.status,
-      timestamp: request.timestamp,
-      exits: request.exits,
-      rejectionReason: request.rejectionReason
-    }));
-    
-    socket.emit('buildQueueStatus', queueStatus);
+    log('=== End Room Data Update ===\n');
   });
 
   // Handle disconnection
