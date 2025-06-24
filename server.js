@@ -23,7 +23,12 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production'
-      ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
+      ? [
+          'https://leaf-game.herokuapp.com', 
+          'https://leaf-game.netlify.app',
+          'https://leaf-5lrq.onrender.com',
+          process.env.REACT_APP_PRODUCTION_URL || 'https://leaf-5lrq.onrender.com'
+        ]
       : '*',
     methods: ['GET', 'POST'],
     credentials: true
