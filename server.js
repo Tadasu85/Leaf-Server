@@ -52,8 +52,8 @@ io.engine.on('connection_error', (err) => {
   log('Connection error:', err);
 });
 
-// Store room data - simplified structure
-const rooms = new Map();
+// Store chat channel data - simplified structure for real-time communication only
+const chatChannels = new Map();
 
 // Track connected users and their socket IDs
 const connectedUsers = new Map();
@@ -67,30 +67,30 @@ const filterAdminAccounts = (players) => {
   return players.filter(player => !ADMIN_ACCOUNTS.includes(player));
 };
 
-// Helper to get room ID
-const getRoomId = (author, permlink) => `${author}/${permlink}`;
+// Helper to get channel ID from game location
+const getChannelId = (author, permlink) => `${author}/${permlink}`;
 
-// Helper to clean up empty rooms
-const cleanupRoom = (roomId) => {
-  const room = rooms.get(roomId);
-  if (room && room.players.length === 0) {
-    log(`Cleaning up empty room: ${roomId}`);
-    rooms.delete(roomId);
+// Helper to clean up empty chat channels
+const cleanupChatChannel = (channelId) => {
+  const channel = chatChannels.get(channelId);
+  if (channel && channel.players.length === 0) {
+    log(`Cleaning up empty chat channel: ${channelId}`);
+    chatChannels.delete(channelId);
   }
 };
 
-// Helper to broadcast to room
-const broadcastToRoom = (room, event, data) => {
-  log(`Broadcasting ${event} to room ${room}:`, data);
-  io.to(room).emit(event, data);
+// Helper to broadcast to chat channel
+const broadcastToChannel = (channelId, event, data) => {
+  log(`Broadcasting ${event} to chat channel ${channelId}:`, data);
+  io.to(channelId).emit(event, data);
 };
 
 // Helper to handle user disconnection
 const handleUserDisconnect = (username, socket) => {
   log(`Handling disconnect for user: ${username} (Socket ID: ${socket.id})`);
   
-  // Get all rooms the user was in before removing tracking
-  const userRooms = Array.from(socket.rooms).filter(r => r !== socket.id);
+  // Get all chat channels the user was in before removing tracking
+  const userChannels = Array.from(socket.rooms).filter(r => r !== socket.id);
   
   // Only remove from tracking if this is the last socket for this user
   const currentSocketId = connectedUsers.get(username);
@@ -100,55 +100,49 @@ const handleUserDisconnect = (username, socket) => {
   }
   socketToUser.delete(socket.id);
   
-  // Remove from all rooms and update room states
-  userRooms.forEach(room => {
-    log(`Removing ${username} from room ${room} due to disconnect`);
-    const roomInfo = rooms.get(room);
-    if (roomInfo) {
-      // Get current players in room from socket connections
-      const roomSockets = io.sockets.adapter.rooms.get(room);
-      let playersInRoom = [];
-      if (roomSockets) {
-        playersInRoom = Array.from(roomSockets)
+  // Remove from all chat channels and update channel states
+  userChannels.forEach(channelId => {
+    log(`Removing ${username} from chat channel ${channelId} due to disconnect`);
+    const channelInfo = chatChannels.get(channelId);
+    if (channelInfo) {
+      // Get current players in channel from socket connections
+      const channelSockets = io.sockets.adapter.rooms.get(channelId);
+      let playersInChannel = [];
+      if (channelSockets) {
+        playersInChannel = Array.from(channelSockets)
           .map(socketId => socketToUser.get(socketId))
           .filter(Boolean)
           .filter(player => !ADMIN_ACCOUNTS.includes(player));
       }
       
-      // Update room state with current players
-      roomInfo.players = playersInRoom;
-      rooms.set(room, roomInfo);
+      // Update channel state with current players
+      channelInfo.players = playersInChannel;
+      chatChannels.set(channelId, channelInfo);
       
-      // Clean up empty rooms
-      cleanupRoom(room);
+      // Clean up empty channels
+      cleanupChatChannel(channelId);
       
-      // Broadcast room update to remaining players
-      broadcastToRoom(room, 'playerLeft', {
+      // Broadcast channel update to remaining players
+      broadcastToChannel(channelId, 'playerLeft', {
         username,
-        players: roomInfo.players,
-        room
+        players: channelInfo.players,
+        channelId
       });
     }
   });
 };
 
-// Helper to log room state
-const logRoomState = (roomId, action) => {
-  const room = rooms.get(roomId);
-  log(`\n=== Room State (${action}) ===`);
-  log(`Room ID: ${roomId}`);
-  if (room) {
-    log(`Author: ${room.author || 'Not set'}`);
-    log(`Permlink: ${room.permlink || 'Not set'}`);
-    log(`Title: ${room.title || 'Not set'}`);
-    log(`Body: ${room.body ? room.body.substring(0, 100) + '...' : 'Not set'}`);
-    log(`Players (${room.players ? room.players.length : 0}): ${room.players ? room.players.join(', ') : 'None'}`);
-    log(`Exits: ${room.exits ? Object.keys(room.exits).join(', ') : 'None'}`);
-    log(`Details: ${room.details ? JSON.stringify(room.details) : 'None'}`);
-    log(`Last Updated: ${room.lastUpdated ? new Date(room.lastUpdated).toLocaleString() : 'Not set'}`);
-    log('Full Room Data:', room);
+// Helper to log chat channel state
+const logChatChannelState = (channelId, action) => {
+  const channel = chatChannels.get(channelId);
+  log(`\n=== Chat Channel State (${action}) ===`);
+  log(`Channel ID: ${channelId}`);
+  if (channel) {
+    log(`Players (${channel.players ? channel.players.length : 0}): ${channel.players ? channel.players.join(', ') : 'None'}`);
+    log(`Last Updated: ${channel.lastUpdated ? new Date(channel.lastUpdated).toLocaleString() : 'Not set'}`);
+    log('Full Channel Data:', channel);
   } else {
-    log('Room not found');
+    log('Chat channel not found');
   }
   log('===========================\n');
 };
@@ -158,60 +152,54 @@ const logPlayerState = (username, action) => {
   log(`\n=== Player State (${action}) ===`);
   log(`Username: ${username}`);
   log(`Socket ID: ${connectedUsers.get(username)}`);
-  const playerRooms = Array.from(socketToUser.entries())
+  const playerChannels = Array.from(socketToUser.entries())
     .filter(([_, name]) => name === username)
     .map(([socketId]) => Array.from(io.sockets.sockets.get(socketId)?.rooms || []))
     .flat()
-    .filter(room => room !== connectedUsers.get(username));
-  log(`Current Rooms: ${playerRooms.join(', ')}`);
+    .filter(channel => channel !== connectedUsers.get(username));
+  log(`Current Chat Channels: ${playerChannels.join(', ')}`);
   log('===========================\n');
 };
 
-// Helper to sync room state
-const syncRoomState = (room) => {
-  const roomInfo = rooms.get(room);
-  if (roomInfo) {
-    // Get all sockets in the room
-    const roomSockets = io.sockets.adapter.rooms.get(room);
-    if (roomSockets) {
-      // Get current room state without broadcasting to all players
-      let playersInRoom = [];
-      if (roomSockets) {
-        playersInRoom = Array.from(roomSockets)
+// Helper to sync chat channel state
+const syncChatChannelState = (channelId) => {
+  const channelInfo = chatChannels.get(channelId);
+  if (channelInfo) {
+    // Get all sockets in the channel
+    const channelSockets = io.sockets.adapter.rooms.get(channelId);
+    if (channelSockets) {
+      // Get current channel state without broadcasting to all players
+      let playersInChannel = [];
+      if (channelSockets) {
+        playersInChannel = Array.from(channelSockets)
           .map(socketId => socketToUser.get(socketId))
           .filter(Boolean)
           .filter(player => !ADMIN_ACCOUNTS.includes(player));
       }
 
-      log('Players in room:', playersInRoom);
+      log('Players in chat channel:', playersInChannel);
 
-      // Update room state with all required fields
-      const updatedRoomInfo = {
-        ...roomInfo,
-        body: roomInfo.body || '',
-        title: roomInfo.title || room,
-        players: playersInRoom,
-        details: roomInfo.details || {},
-        exits: roomInfo.exits || {},
-        author: roomInfo.author || room.split('/')[0],
-        permlink: roomInfo.permlink || room,
+      // Update channel state with current players
+      const updatedChannelInfo = {
+        ...channelInfo,
+        players: playersInChannel,
         lastUpdated: Date.now()
       };
-      rooms.set(room, updatedRoomInfo);
+      chatChannels.set(channelId, updatedChannelInfo);
 
-      // Log room state change
-      logRoomState(room, 'sync');
+      // Log channel state change
+      logChatChannelState(channelId, 'sync');
 
       // Broadcast updated state to all players with consistent format
-      broadcastToRoom(room, 'roomUpdate', {
-        ...updatedRoomInfo,
-        room
+      broadcastToChannel(channelId, 'channelUpdate', {
+        ...updatedChannelInfo,
+        channelId
       });
 
-      return updatedRoomInfo;
+      return updatedChannelInfo;
     }
   }
-  return roomInfo;
+  return channelInfo;
 };
 
 io.on('connection', (socket) => {
@@ -280,238 +268,214 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Add getRoomState handler
-  socket.on('getRoomState', ({ room }) => {
+  // Add getChatChannelState handler
+  socket.on('getChatChannelState', ({ channelId }) => {
     const username = socketToUser.get(socket.id);
     if (!username) {
-      log('Error: Attempted to get room state without username');
+      log('Error: Attempted to get chat channel state without username');
       return;
     }
     
-    log(`${username} requesting state for room: ${room}`);
-    const roomInfo = rooms.get(room);
-    if (roomInfo) {
-      // Get current room state without broadcasting to all players
-      const roomSockets = io.sockets.adapter.rooms.get(room);
-      let playersInRoom = [];
-      if (roomSockets) {
-        playersInRoom = Array.from(roomSockets)
+    log(`${username} requesting state for chat channel: ${channelId}`);
+    const channelInfo = chatChannels.get(channelId);
+    if (channelInfo) {
+      // Get current channel state without broadcasting to all players
+      const channelSockets = io.sockets.adapter.rooms.get(channelId);
+      let playersInChannel = [];
+      if (channelSockets) {
+        playersInChannel = Array.from(channelSockets)
           .map(socketId => socketToUser.get(socketId))
           .filter(Boolean)
           .filter(player => !ADMIN_ACCOUNTS.includes(player));
       }
 
-      // Create room state without broadcasting
-      const currentRoomInfo = {
-        ...roomInfo,
-        body: roomInfo.body || '',
-        title: roomInfo.title || room,
-        players: playersInRoom,
-        details: roomInfo.details || {},
-        exits: roomInfo.exits || {},
-        author: roomInfo.author || room.split('/')[0],
-        permlink: roomInfo.permlink || room,
+      // Create channel state without broadcasting
+      const currentChannelInfo = {
+        ...channelInfo,
+        players: playersInChannel,
         lastUpdated: Date.now()
       };
       
-      // Update room state without broadcasting
-      rooms.set(room, currentRoomInfo);
+      // Update channel state without broadcasting
+      chatChannels.set(channelId, currentChannelInfo);
       
-      // Send room state only to the requesting socket
-      socket.emit('roomState', {
-        ...currentRoomInfo,
-        room
+      // Send channel state only to the requesting socket
+      socket.emit('chatChannelState', {
+        ...currentChannelInfo,
+        channelId
       });
     } else {
-      // If room doesn't exist, create it with current player and join the socket
-      const newRoomInfo = {
-        body: '',
-        title: room,
+      // If channel doesn't exist, create it with current player and join the socket
+      const newChannelInfo = {
         players: ADMIN_ACCOUNTS.includes(username) ? [] : [username], // Don't add admin accounts as players
-        details: {},
-        exits: {},
-        author: room.split('/')[0],
-        permlink: room,
         lastUpdated: Date.now()
       };
-      rooms.set(room, newRoomInfo);
+      chatChannels.set(channelId, newChannelInfo);
       
-      // Join the socket to the room
-      socket.join(room);
-      socket.currentRoom = room;
-      log(`${username} joined room ${room} via getRoomState`);
+      // Join the socket to the channel
+      socket.join(channelId);
+      socket.currentChannel = channelId;
+      log(`${username} joined chat channel ${channelId} via getChatChannelState`);
       
-      socket.emit('roomState', {
-        ...newRoomInfo,
-        room
+      socket.emit('chatChannelState', {
+        ...newChannelInfo,
+        channelId
       });
     }
   });
 
-  // Handle room joining
-  socket.on('joinRoom', (room) => {
+  // Handle chat channel joining
+  socket.on('joinChatChannel', (channelId) => {
     try {
       const username = socketToUser.get(socket.id);
       if (!username) {
-        log('Error: Attempted to join room without username');
+        log('Error: Attempted to join chat channel without username');
         return;
       }
 
-      // Leave current room if any and notify other players
-      if (socket.currentRoom) {
-        const oldRoom = socket.currentRoom;
-        socket.leave(oldRoom);
-        log(`${username} left room ${oldRoom}`);
+      // Leave current channel if any and notify other players
+      if (socket.currentChannel) {
+        const oldChannel = socket.currentChannel;
+        socket.leave(oldChannel);
+        log(`${username} left chat channel ${oldChannel}`);
         
-        // Notify other players in the old room that someone left
-        const oldRoomSockets = io.sockets.adapter.rooms.get(oldRoom);
-        if (oldRoomSockets) {
-          const remainingPlayers = Array.from(oldRoomSockets)
+        // Notify other players in the old channel that someone left
+        const oldChannelSockets = io.sockets.adapter.rooms.get(oldChannel);
+        if (oldChannelSockets) {
+          const remainingPlayers = Array.from(oldChannelSockets)
             .map(socketId => socketToUser.get(socketId))
             .filter(Boolean)
             .filter(player => !ADMIN_ACCOUNTS.includes(player));
           
-          // Update old room state
-          const oldRoomInfo = rooms.get(oldRoom);
-          if (oldRoomInfo) {
-            oldRoomInfo.players = remainingPlayers;
-            oldRoomInfo.lastUpdated = Date.now();
-            rooms.set(oldRoom, oldRoomInfo);
+          // Update old channel state
+          const oldChannelInfo = chatChannels.get(oldChannel);
+          if (oldChannelInfo) {
+            oldChannelInfo.players = remainingPlayers;
+            oldChannelInfo.lastUpdated = Date.now();
+            chatChannels.set(oldChannel, oldChannelInfo);
             
-            // Broadcast to remaining players in old room
-            socket.to(oldRoom).emit('playerLeft', {
+            // Broadcast to remaining players in old channel
+            socket.to(oldChannel).emit('playerLeft', {
               username,
               players: remainingPlayers,
-              room: oldRoom
+              channelId: oldChannel
             });
           }
         }
       }
 
-      // Join new room
-      socket.join(room);
-      socket.currentRoom = room;
-      log(`${username} joined room ${room}`);
+      // Join new channel
+      socket.join(channelId);
+      socket.currentChannel = channelId;
+      log(`${username} joined chat channel ${channelId}`);
 
-      // Get current room state or create new one
-      const roomInfo = rooms.get(room) || {
-        body: '',
-        title: room,
+      // Get current channel state or create new one
+      const channelInfo = chatChannels.get(channelId) || {
         players: [],
-        details: {},
-        exits: {},
-        author: room.split('/')[0],
-        permlink: room,
         lastUpdated: Date.now()
       };
 
-      // Calculate current players in room from socket connections
-      const roomSockets = io.sockets.adapter.rooms.get(room);
-      let playersInRoom = [];
-      if (roomSockets) {
-        playersInRoom = Array.from(roomSockets)
+      // Calculate current players in channel from socket connections
+      const channelSockets = io.sockets.adapter.rooms.get(channelId);
+      let playersInChannel = [];
+      if (channelSockets) {
+        playersInChannel = Array.from(channelSockets)
           .map(socketId => socketToUser.get(socketId))
           .filter(Boolean)
           .filter(player => !ADMIN_ACCOUNTS.includes(player));
       }
 
-      // Update room state with current players
-      const updatedRoomInfo = {
-        ...roomInfo,
-        body: roomInfo.body || '',
-        title: roomInfo.title || room,
-        players: playersInRoom, // Use actual players in room, not stored players
-        details: roomInfo.details || {},
-        exits: roomInfo.exits || {},
-        author: roomInfo.author || room.split('/')[0],
-        permlink: roomInfo.permlink || room,
+      // Update channel state with current players
+      const updatedChannelInfo = {
+        ...channelInfo,
+        players: playersInChannel, // Use actual players in channel, not stored players
         lastUpdated: Date.now()
       };
       
-      // Update room state
-      rooms.set(room, updatedRoomInfo);
+      // Update channel state
+      chatChannels.set(channelId, updatedChannelInfo);
 
-      // Log room state change
-      logRoomState(room, 'join');
+      // Log channel state change
+      logChatChannelState(channelId, 'join');
 
       // Notify other players about the new player (but not the joining player)
-      socket.to(room).emit('playerJoined', {
+      socket.to(channelId).emit('playerJoined', {
         username,
-        players: updatedRoomInfo.players,
-        room
+        players: updatedChannelInfo.players,
+        channelId
       });
 
-      // Send room state only to the joining player
-      socket.emit('roomUpdate', {
-        ...updatedRoomInfo,
-        room
+      // Send channel state only to the joining player
+      socket.emit('chatChannelUpdate', {
+        ...updatedChannelInfo,
+        channelId
       });
     } catch (error) {
-      log('Error in joinRoom:', error);
+      log('Error in joinChatChannel:', error);
     }
   });
 
-  // Handle room leaves
-  socket.on('leaveRoom', ({ username, room }) => {
-    log(`\n=== Room Leave Event ===`);
+  // Handle chat channel leaves
+  socket.on('leaveChatChannel', ({ username, channelId }) => {
+    log(`\n=== Chat Channel Leave Event ===`);
     log(`Player: ${username}`);
-    log(`Room: ${room}`);
+    log(`Channel: ${channelId}`);
     log(`Socket ID: ${socket.id}`);
     
-    if (!room || !username) {
-      log('Invalid leave request - missing room or username');
+    if (!channelId || !username) {
+      log('Invalid leave request - missing channel or username');
       return;
     }
     
-    socket.leave(room);
+    socket.leave(channelId);
     
-    // Clear the current room if it matches the room being left
-    if (socket.currentRoom === room) {
-      socket.currentRoom = null;
-      log(`${username} cleared current room tracking`);
+    // Clear the current channel if it matches the channel being left
+    if (socket.currentChannel === channelId) {
+      socket.currentChannel = null;
+      log(`${username} cleared current channel tracking`);
     }
     
-    // Update room state and notify remaining players
-    const updatedRoomState = syncRoomState(room);
-    if (updatedRoomState) {
-      broadcastToRoom(room, 'playerLeft', {
+    // Update channel state and notify remaining players
+    const updatedChannelState = syncChatChannelState(channelId);
+    if (updatedChannelState) {
+      broadcastToChannel(channelId, 'playerLeft', {
         username,
-        players: updatedRoomState.players,
-        room
+        players: updatedChannelState.players,
+        channelId
       });
     }
     
     // Log player state after leave
     logPlayerState(username, 'leave');
-    log('=== End Room Leave Event ===\n');
+    log('=== End Chat Channel Leave Event ===\n');
   });
 
   // Handle chat messages
-  socket.on('chat', ({ room, message, username }) => {
-    if (!room || !username || !message) {
-      log('Invalid chat message - missing room, username, or message');
+  socket.on('chat', ({ channelId, message, username }) => {
+    if (!channelId || !username || !message) {
+      log('Invalid chat message - missing channel, username, or message');
       return;
     }
     log(`\n=== Chat Event ===`);
-    log(`Room: ${room}`);
+    log(`Channel: ${channelId}`);
     log(`Player: ${username}`);
     log(`Message: ${message}`);
     log('=== End Chat Event ===\n');
-    broadcastToRoom(room, 'chat', { username, message, room });
+    broadcastToChannel(channelId, 'chat', { username, message, channelId });
   });
 
   // Handle emotes
-  socket.on('emote', ({ room, emote, username }) => {
-    if (!room || !username || !emote) {
-      log('Invalid emote - missing room, username, or emote');
+  socket.on('emote', ({ channelId, emote, username }) => {
+    if (!channelId || !username || !emote) {
+      log('Invalid emote - missing channel, username, or emote');
       return;
     }
     log(`\n=== Emote Event ===`);
-    log(`Room: ${room}`);
+    log(`Channel: ${channelId}`);
     log(`Player: ${username}`);
     log(`Emote: ${emote}`);
     log('=== End Emote Event ===\n');
-    broadcastToRoom(room, 'emote', { username, emote, room });
+    broadcastToChannel(channelId, 'emote', { username, emote, channelId });
   });
 
   // Handle WebRTC signaling
@@ -524,59 +488,6 @@ io.on('connection', (socket) => {
     } else {
       log(`Target user ${to} not found for signal. Current users:`, Array.from(connectedUsers.entries()));
     }
-  });
-
-  // Handle room data updates from blockchain
-  socket.on('updateRoomData', ({ room, roomData }) => {
-    const username = socketToUser.get(socket.id);
-    if (!username) {
-      log('Error: Attempted to update room data without username');
-      return;
-    }
-
-    log(`\n=== Room Data Update ===`);
-    log(`Room: ${room}`);
-    log(`Updated by: ${username}`);
-    log(`Room Data:`, roomData);
-
-    const existingRoom = rooms.get(room);
-    if (existingRoom) {
-      // Get current players in room from socket connections
-      const roomSockets = io.sockets.adapter.rooms.get(room);
-      let playersInRoom = [];
-      if (roomSockets) {
-        playersInRoom = Array.from(roomSockets)
-          .map(socketId => socketToUser.get(socketId))
-          .filter(Boolean)
-          .filter(player => !ADMIN_ACCOUNTS.includes(player));
-      }
-
-      // Update existing room with blockchain data and current players
-      const updatedRoomInfo = {
-        ...existingRoom,
-        body: roomData.body || roomData.description || existingRoom.body,
-        title: roomData.title || existingRoom.title,
-        exits: roomData.exits || existingRoom.exits,
-        details: roomData.details || existingRoom.details,
-        author: roomData.author || existingRoom.author,
-        permlink: roomData.permlink || existingRoom.permlink,
-        players: playersInRoom, // Use current players, not stored players
-        lastUpdated: Date.now()
-      };
-      
-      rooms.set(room, updatedRoomInfo);
-      log(`Updated room data for ${room}`);
-      logRoomState(room, 'blockchain-update');
-      
-      // Broadcast updated room data to all players in the room
-      broadcastToRoom(room, 'roomUpdate', {
-        ...updatedRoomInfo,
-        room
-      });
-    } else {
-      log(`Room ${room} not found, cannot update data`);
-    }
-    log('=== End Room Data Update ===\n');
   });
 
   // Handle disconnection
