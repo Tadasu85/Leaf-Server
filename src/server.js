@@ -65,10 +65,138 @@ io.engine.on('connection_error', (err) => {
 
 // Socket connection handling
 io.on('connection', (socket) => {
-  logger.info(`New socket connection: ${socket.id}`);
+  const username = socket.handshake.query.username;
+  logger.info(`New socket connection: ${socket.id}, username: ${username}`);
   
+  // Validate username is provided
+  if (!username) {
+    logger.warn('Connection attempt without username - disconnecting');
+    socket.disconnect();
+    return;
+  }
+
   // Initialize user
   userService.handleConnection(socket);
+  
+  // Handle user registration
+  socket.on('register', ({ username }, callback) => {
+    logger.info(`User registration request from: ${username} (Socket ID: ${socket.id})`);
+    const success = userService.registerUser(socket, username);
+    
+    if (typeof callback === 'function') {
+      callback({ success });
+    }
+  });
+
+  // Handle room state request
+  socket.on('getRoomState', ({ room }) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to get room state without username');
+      return;
+    }
+    
+    logger.info(`${username} requesting state for room: ${room}`);
+    const roomInfo = roomService.getRoomInfo(room);
+    
+    socket.emit('roomState', {
+      room,
+      players: roomInfo ? roomInfo.players : [],
+      lastUpdated: roomInfo ? roomInfo.lastUpdated : Date.now()
+    });
+  });
+
+  // Handle room joining
+  socket.on('joinRoom', (room) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to join room without username');
+      return;
+    }
+    
+    logger.info(`User ${username} joining room: ${room}`);
+    roomService.joinRoom(socket, { roomId: room, username });
+  });
+
+  // Handle room leaving
+  socket.on('leaveRoom', ({ username, room }) => {
+    const currentUsername = userService.getUserBySocket(socket.id);
+    if (!currentUsername || currentUsername !== username) {
+      logger.warn('Username mismatch in leaveRoom');
+      return;
+    }
+    
+    logger.info(`User ${username} leaving room: ${room}`);
+    roomService.leaveRoom(socket, { roomId: room, username });
+  });
+
+  // Handle room data updates
+  socket.on('updateRoomData', ({ room, roomData }) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to update room data without username');
+      return;
+    }
+    
+    logger.info(`User ${username} updating room data for: ${room}`);
+    roomService.updateRoomData(room, roomData);
+  });
+
+  // Chat events
+  socket.on('joinChatChannel', (data) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to join chat channel without username');
+      return;
+    }
+    chatService.joinChannel(socket, { ...data, username });
+  });
+  
+  socket.on('leaveChatChannel', (data) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to leave chat channel without username');
+      return;
+    }
+    chatService.leaveChannel(socket, { ...data, username });
+  });
+  
+  socket.on('chatMessage', (data) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to send chat message without username');
+      return;
+    }
+    chatService.handleMessage(socket, { ...data, username });
+  });
+  
+  socket.on('emote', (data) => {
+    const username = userService.getUserBySocket(socket.id);
+    if (!username) {
+      logger.warn('Attempted to send emote without username');
+      return;
+    }
+    chatService.handleEmote(socket, { ...data, username });
+  });
+
+  // Legacy chat events (for backward compatibility)
+  socket.on('chat', ({ room, message, username }) => {
+    const currentUsername = userService.getUserBySocket(socket.id);
+    if (!currentUsername || currentUsername !== username) {
+      logger.warn('Username mismatch in chat');
+      return;
+    }
+    io.to(room).emit('chat', { username, message, room });
+  });
+
+  socket.on('emote', ({ room, emote, username }) => {
+    const currentUsername = userService.getUserBySocket(socket.id);
+    if (!currentUsername || currentUsername !== username) {
+      logger.warn('Username mismatch in emote');
+      return;
+    }
+    io.to(room).emit('emote', { username, emote, room });
+  });
   
   // Handle disconnection
   socket.on('disconnect', () => {
@@ -76,32 +204,6 @@ io.on('connection', (socket) => {
     chatService.handleDisconnection(socket);
     roomService.handleDisconnection(socket);
     logger.info(`Socket disconnected: ${socket.id}`);
-  });
-  
-  // Chat events
-  socket.on('joinChatChannel', (data) => {
-    chatService.joinChannel(socket, data);
-  });
-  
-  socket.on('leaveChatChannel', (data) => {
-    chatService.leaveChannel(socket, data);
-  });
-  
-  socket.on('chatMessage', (data) => {
-    chatService.handleMessage(socket, data);
-  });
-  
-  socket.on('emote', (data) => {
-    chatService.handleEmote(socket, data);
-  });
-  
-  // Room events
-  socket.on('joinRoom', (data) => {
-    roomService.joinRoom(socket, data);
-  });
-  
-  socket.on('leaveRoom', (data) => {
-    roomService.leaveRoom(socket, data);
   });
 });
 
@@ -118,11 +220,20 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Start server
-const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+// Basic HTTP GET route for the root path
+app.get('/', (req, res) => {
+  res.sendStatus(200); // Respond with a 200 OK status for health checks
 });
+
+// Start server
+const PORT = process.env.PORT || 4001;
+
+// Only start the server if not in test environment
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+}
 
 module.exports = { app, server, io }; 

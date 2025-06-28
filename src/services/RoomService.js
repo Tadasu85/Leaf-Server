@@ -25,7 +25,7 @@ class RoomService {
     if (!this.rooms.has(roomId)) {
       this.rooms.set(roomId, {
         id: roomId,
-        players: new Set(),
+        players: [],
         lastUpdated: Date.now()
       });
       this.roomPlayers.set(roomId, new Set());
@@ -36,18 +36,17 @@ class RoomService {
     
     // Add player to room
     roomPlayerSet.add(username);
-    room.players = roomPlayerSet;
+    room.players = Array.from(roomPlayerSet);
     room.lastUpdated = Date.now();
 
     // Join socket room
     socket.join(roomId);
     
-    // Broadcast room update
-    this.broadcastRoomUpdate(roomId, {
-      type: 'playerJoined',
-      username,
-      players: Array.from(roomPlayerSet),
-      roomId
+    // Broadcast room update to all players in the room
+    this.io.to(roomId).emit('roomUpdate', {
+      room: roomId,
+      players: room.players,
+      lastUpdated: room.lastUpdated
     });
 
     this.logger.info(`User ${username} joined room ${roomId}`);
@@ -68,7 +67,7 @@ class RoomService {
     if (room && roomPlayerSet) {
       // Remove player from room
       roomPlayerSet.delete(username);
-      room.players = roomPlayerSet;
+      room.players = Array.from(roomPlayerSet);
       room.lastUpdated = Date.now();
 
       // Leave socket room
@@ -80,12 +79,11 @@ class RoomService {
         this.roomPlayers.delete(roomId);
         this.logger.info(`Cleaned up empty room: ${roomId}`);
       } else {
-        // Broadcast room update
-        this.broadcastRoomUpdate(roomId, {
-          type: 'playerLeft',
+        // Broadcast playerLeft event to remaining players
+        this.io.to(roomId).emit('playerLeft', {
           username,
-          players: Array.from(roomPlayerSet),
-          roomId
+          room: roomId,
+          players: room.players
         });
       }
     }
@@ -97,12 +95,45 @@ class RoomService {
   updateRoomData(roomId, data) {
     const room = this.rooms.get(roomId);
     if (room) {
-      Object.assign(room, data, { lastUpdated: Date.now() });
-      this.broadcastRoomUpdate(roomId, {
-        type: 'roomUpdated',
-        roomId,
-        data
+      // Merge existing room data with new data
+      const updatedRoomInfo = {
+        ...room,
+        body: data.body || data.description || room.body,
+        title: data.title || room.title,
+        exits: data.exits || room.exits,
+        details: data.details || room.details,
+        author: data.author || room.author,
+        permlink: data.permlink || room.permlink,
+        lastUpdated: Date.now()
+      };
+      
+      this.rooms.set(roomId, updatedRoomInfo);
+      
+      // Broadcast updated room data to all players in the room
+      this.io.to(roomId).emit('roomUpdate', {
+        ...updatedRoomInfo,
+        room: roomId
       });
+      
+      this.logger.info(`Room ${roomId} data updated`);
+    } else {
+      // Create new room if it doesn't exist
+      const newRoom = {
+        id: roomId,
+        players: [],
+        body: data.body || data.description,
+        title: data.title,
+        exits: data.exits,
+        details: data.details,
+        author: data.author,
+        permlink: data.permlink,
+        lastUpdated: Date.now()
+      };
+      
+      this.rooms.set(roomId, newRoom);
+      this.roomPlayers.set(roomId, new Set());
+      
+      this.logger.info(`Created new room ${roomId} with data`);
     }
   }
 
