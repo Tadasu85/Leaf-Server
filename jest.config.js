@@ -22,8 +22,5 @@ module.exports = {
   detectOpenHandles: true, // Detect open handles that prevent Jest from exiting
   maxWorkers: 1, // Run tests serially to prevent port conflicts
   collectCoverage: true,
-  coverageProvider: 'v8',
-  transform: {
-    '^.+\\.js$': 'babel-jest'
-  }
+  coverageProvider: 'v8'
 }; 
