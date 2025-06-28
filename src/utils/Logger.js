@@ -4,33 +4,33 @@ class Logger {
   }
 
   // Helper function for timestamped logging
-  log(level, ...args) {
+  _log(level, ...args) {
     const timestamp = new Date().toISOString();
     const levelUpper = level.toUpperCase();
     console.log(`[${timestamp}] [${levelUpper}]`, ...args);
   }
 
   info(...args) {
-    this.log('info', ...args);
+    this._log('info', ...args);
   }
 
   error(...args) {
-    this.log('error', ...args);
+    this._log('error', ...args);
   }
 
   warn(...args) {
-    this.log('warn', ...args);
+    this._log('warn', ...args);
   }
 
   debug(...args) {
     if (this.logLevel === 'debug') {
-      this.log('debug', ...args);
+      this._log('debug', ...args);
     }
   }
 
   // Legacy method for backward compatibility
   log(...args) {
-    this.info(...args);
+    this._log('info', ...args);
   }
 }
 
