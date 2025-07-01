@@ -4,8 +4,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# TypeScript build output
-dist/
+# TypeScript build info (but keep compiled output)
 *.tsbuildinfo
 
 # Environment variables
