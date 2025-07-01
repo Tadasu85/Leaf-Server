@@ -1,17 +1,17 @@
 # Leaf Server
 
-A WebSocket server component that provides real-time communication and state management for text-based adventure games. The server handles room state synchronization, player presence tracking, and real-time messaging between players.
+A TypeScript-based WebSocket signaling server that provides real-time communication for the Leaf game. The server handles chat channel management, user presence tracking, and real-time messaging between players.
 
 ## Features
 
+- TypeScript-based codebase with full type safety
 - WebSocket-based real-time communication
-- Room state management and synchronization
-- Player presence tracking
+- Chat channel management and synchronization
+- User presence tracking and status broadcasting
 - Chat and emote broadcasting
-- Builder queue management
-- P2P signaling for direct player connections
-- Automatic room cleanup
+- Automatic channel cleanup
 - Connection state management
+- Health check endpoints
 
 ## Prerequisites
 
@@ -39,30 +39,35 @@ A WebSocket server component that provides real-time communication and state man
    npm install
    ```
 
-4. Start the server
+4. Build and start the server
    ```bash
+   npm run build
    npm start
    ```
 
 ## Configuration
 
-The server uses the following hardcoded configuration:
+The server uses TypeScript configuration and environment variables:
 
-```javascript
+```typescript
 // Server Configuration
-const PORT = process.env.PORT || 4001;
+const PORT = process.env['PORT'] ? parseInt(process.env['PORT']) : 4001;
 
 // WebSocket Configuration
-const io = new Server(server, {
+const io = new SocketIOServer(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: process.env['NODE_ENV'] === 'production' 
+      ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
+      : '*',
+    methods: ['GET', 'POST'],
+    credentials: true
   },
-  transports: ['websocket'], // Only use WebSocket
-  pingTimeout: 30000,        // 30 seconds
-  pingInterval: 15000,       // 15 seconds
-  connectTimeout: 20000,     // 20 seconds
-  maxHttpBufferSize: 1e6     // 1MB
+  transports: ['websocket', 'polling'],
+  pingTimeout: 30000,
+  pingInterval: 10000,
+  connectTimeout: 20000,
+  allowUpgrades: true,
+  maxHttpBufferSize: 1e6
 });
 ```
 
@@ -73,97 +78,98 @@ const io = new Server(server, {
 #### Client to Server
 
 - `register`: Register a new user
-  ```javascript
+  ```typescript
   {
     username: string
   }
   ```
 
-- `joinRoom`: Join a game room
-  ```javascript
+- `joinChatChannel`: Join a chat channel
+  ```typescript
   {
-    room: string,
-    username: string,
-    roomData: object
+    channelId: string
   }
   ```
 
-- `leaveRoom`: Leave a game room
-  ```javascript
+- `leaveChatChannel`: Leave a chat channel
+  ```typescript
   {
-    username: string,
-    room: string
-  }
-  ```
-
-- `chat`: Send a chat message
-  ```javascript
-  {
-    room: string,
-    message: string,
+    channelId: string,
     username: string
+  }
+  ```
+
+- `chatMessage`: Send a chat message
+  ```typescript
+  {
+    channelId: string,
+    message: string
   }
   ```
 
 - `emote`: Send an emote
-  ```javascript
+  ```typescript
   {
-    room: string,
-    emote: string,
-    username: string
-  }
-  ```
-
-- `signal`: WebRTC signaling
-  ```javascript
-  {
-    from: string,
-    to: string,
-    signal: object
+    channelId: string,
+    emote: string
   }
   ```
 
 #### Server to Client
 
-- `roomState`: Current room state
-  ```javascript
+- `chatChannelState`: Current channel state
+  ```typescript
   {
-    room: string,
-    players: string[]
-  }
-  ```
-
-- `roomJoined`: Room join confirmation
-  ```javascript
-  {
-    room: string,
-    players: string[]
+    channelId: string,
+    players: string[],
+    lastUpdated: number
   }
   ```
 
 - `playerJoined`: New player notification
-  ```javascript
+  ```typescript
   {
-    room: string,
     username: string,
-    players: string[]
+    players: string[],
+    channelId: string
   }
   ```
 
-- `chat`: Chat message broadcast
-  ```javascript
+- `playerLeft`: Player left notification
+  ```typescript
+  {
+    username: string,
+    players: string[],
+    channelId: string
+  }
+  ```
+
+- `chatMessage`: Chat message broadcast
+  ```typescript
   {
     username: string,
     message: string,
-    room: string
+    timestamp: number,
+    channelId: string
   }
   ```
 
 - `emote`: Emote broadcast
-  ```javascript
+  ```typescript
   {
     username: string,
-    emote: string
+    emote: string,
+    timestamp: number,
+    channelId: string
+  }
+  ```
+
+- `userStatus`: User online/offline status
+  ```typescript
+  {
+    username: string,
+    isOnline: boolean,
+    timestamp: number
   }
   ```
 
@@ -174,15 +180,27 @@ const io = new Server(server, {
 npm test
 ```
 
-### Building for Production
+### Development Commands
+
 ```bash
+# Build TypeScript to JavaScript
 npm run build
+
+# Start development server with auto-rebuild
+npm run dev
+
+# Watch TypeScript files for changes
+npm run dev:watch
+
+# Clean build artifacts
+npm run clean
 ```
 
 ### Code Style
-- Follow ESLint configuration
-- Use TypeScript for new code
+- Follow TypeScript strict mode configuration
+- Use proper type annotations
 - Follow the established project structure
+- All new code must be written in TypeScript
 
 ## Contributing
 

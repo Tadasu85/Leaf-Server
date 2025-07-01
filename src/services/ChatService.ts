@@ -1,24 +1,48 @@
-const config = require('../../config');
+import { Server as SocketIOServer } from 'socket.io';
+import { Socket } from 'socket.io';
+import { 
+  ChatServiceInterface, 
+  ChatChannel, 
+  ChatMessage, 
+  EmoteMessage, 
+  PlayerJoinedEvent, 
+  PlayerLeftEvent, 
+  ChatChannelState, 
+  ChatServiceStatus, 
+  Logger,
+  JoinChatChannelData,
+  LeaveChatChannelData,
+  ChatMessageData,
+  EmoteData
+} from '../types';
 
-class ChatService {
-  constructor(io, logger) {
+class ChatService implements ChatServiceInterface {
+  private io: SocketIOServer;
+  private logger: Logger;
+  private chatChannels: Map<string, ChatChannel>; // Channel ID -> Channel Data
+  private socketToUser: Map<string, string>; // Socket ID -> Username
+  private userToSocket: Map<string, string>; // Username -> Socket ID
+
+  constructor(io: SocketIOServer, logger: Logger) {
     this.io = io;
     this.logger = logger;
-    this.chatChannels = new Map(); // Channel ID -> Channel Data
-    this.socketToUser = new Map(); // Socket ID -> Username
+    this.chatChannels = new Map();
+    this.socketToUser = new Map();
+    this.userToSocket = new Map();
   }
 
   // Handle user connection
-  handleConnection(socket) {
+  handleConnection(_socket: Socket): void {
     // Socket will be associated with user when they join a channel
   }
 
   // Handle user disconnection
-  handleDisconnection(socket) {
+  handleDisconnection(socket: Socket): void {
     const username = this.socketToUser.get(socket.id);
     if (username) {
       this.logger.info(`User ${username} disconnected from chat`);
       this.socketToUser.delete(socket.id);
+      this.userToSocket.delete(username);
       
       // Remove user from all chat channels
       const userChannels = Array.from(socket.rooms).filter(r => r !== socket.id);
@@ -29,7 +53,7 @@ class ChatService {
   }
 
   // Join a chat channel
-  joinChannel(socket, data) {
+  joinChannel(socket: Socket, data: JoinChatChannelData & { username: string }): void {
     const { channelId, username } = data;
     
     if (!channelId || !username) {
@@ -39,6 +63,7 @@ class ChatService {
 
     // Track user
     this.socketToUser.set(socket.id, username);
+    this.userToSocket.set(username, socket.id);
     
     // Join socket room
     socket.join(channelId);
@@ -51,24 +76,33 @@ class ChatService {
       });
     }
     
-    const channel = this.chatChannels.get(channelId);
+    const channel = this.chatChannels.get(channelId)!;
     if (!channel.players.includes(username)) {
       channel.players.push(username);
       channel.lastUpdated = Date.now();
+      
+      // Broadcast player joined event to all players in the channel
+      const playerJoinedEvent: PlayerJoinedEvent = {
+        username,
+        players: channel.players,
+        channelId
+      };
+      this.broadcastToChannel(channelId, 'playerJoined', playerJoinedEvent);
+      
+      // Also emit chatChannelState for consistency
+      const chatChannelState: ChatChannelState = {
+        channelId,
+        players: channel.players,
+        lastUpdated: channel.lastUpdated
+      };
+      this.broadcastToChannel(channelId, 'chatChannelState', chatChannelState);
     }
-    
-    // Broadcast to channel
-    this.broadcastToChannel(channelId, 'playerJoined', {
-      username,
-      players: channel.players,
-      channelId
-    });
     
     this.logger.info(`User ${username} joined chat channel ${channelId}`);
   }
 
   // Leave a chat channel
-  leaveChannel(socket, data) {
+  leaveChannel(socket: Socket, data: LeaveChatChannelData): void {
     const { channelId, username } = data;
     
     if (!channelId || !username) {
@@ -86,7 +120,7 @@ class ChatService {
   }
 
   // Handle chat message
-  handleMessage(socket, data) {
+  handleMessage(socket: Socket, data: ChatMessageData & { username: string }): void {
     const { channelId, username, message } = data;
     
     if (!channelId || !username || !message) {
@@ -102,18 +136,19 @@ class ChatService {
     }
     
     // Broadcast message to channel
-    this.broadcastToChannel(channelId, 'chatMessage', {
+    const chatMessage: ChatMessage = {
       username,
       message,
       timestamp: Date.now(),
       channelId
-    });
+    };
+    this.broadcastToChannel(channelId, 'chatMessage', chatMessage);
     
     this.logger.info(`Chat message from ${username} in ${channelId}: ${message}`);
   }
 
   // Handle emote
-  handleEmote(socket, data) {
+  handleEmote(socket: Socket, data: EmoteData & { username: string }): void {
     const { channelId, username, emote } = data;
     
     if (!channelId || !username || !emote) {
@@ -129,20 +164,22 @@ class ChatService {
     }
     
     // Broadcast emote to channel
-    this.broadcastToChannel(channelId, 'emote', {
+    const emoteMessage: EmoteMessage = {
       username,
       emote,
       timestamp: Date.now(),
       channelId
-    });
+    };
+    this.broadcastToChannel(channelId, 'emote', emoteMessage);
     
     this.logger.info(`Emote from ${username} in ${channelId}: ${emote}`);
   }
 
   // Remove user from channel
-  removeUserFromChannel(channelId, username) {
+  private removeUserFromChannel(channelId: string, username: string): void {
     const channel = this.chatChannels.get(channelId);
     if (channel) {
+      const wasInChannel = channel.players.includes(username);
       channel.players = channel.players.filter(p => p !== username);
       channel.lastUpdated = Date.now();
       
@@ -150,35 +187,44 @@ class ChatService {
       if (channel.players.length === 0) {
         this.chatChannels.delete(channelId);
         this.logger.info(`Cleaned up empty chat channel: ${channelId}`);
-      } else {
-        // Broadcast to remaining players
-        this.broadcastToChannel(channelId, 'playerLeft', {
+      } else if (wasInChannel) {
+        // Broadcast player left event to remaining players
+        const playerLeftEvent: PlayerLeftEvent = {
           username,
           players: channel.players,
           channelId
-        });
+        };
+        this.broadcastToChannel(channelId, 'playerLeft', playerLeftEvent);
+        
+        // Also emit chatChannelState for consistency
+        const chatChannelState: ChatChannelState = {
+          channelId,
+          players: channel.players,
+          lastUpdated: channel.lastUpdated
+        };
+        this.broadcastToChannel(channelId, 'chatChannelState', chatChannelState);
       }
     }
   }
 
   // Broadcast to channel
-  broadcastToChannel(channelId, event, data) {
+  private broadcastToChannel(channelId: string, event: string, data: any): void {
     this.logger.debug(`Broadcasting ${event} to ${channelId}:`, data);
     this.io.to(channelId).emit(event, data);
   }
 
   // Get channel info
-  getChannelInfo(channelId) {
+  getChannelInfo(channelId: string): ChatChannel | null {
     return this.chatChannels.get(channelId) || null;
   }
 
   // Get all channels
-  getAllChannels() {
+  getAllChannels(): [string, ChatChannel][] {
     return Array.from(this.chatChannels.entries());
   }
 
   // Get service status
-  getStatus() {
+  getStatus(): ChatServiceStatus {
     return {
       activeChannels: this.chatChannels.size,
       connectedUsers: this.socketToUser.size,
@@ -187,4 +233,4 @@ class ChatService {
   }
 }
 
-module.exports = ChatService; 
+export default ChatService; 
