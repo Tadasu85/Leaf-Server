@@ -1,21 +1,30 @@
-const config = require('../../config');
+import { Server as SocketIOServer } from 'socket.io';
+import { Socket } from 'socket.io';
+import { UserServiceInterface, UserSession, UserStatusEvent, UserServiceStatus, Logger } from '../types';
+import config from '../config';
 
-class UserService {
-  constructor(io, logger) {
+class UserService implements UserServiceInterface {
+  private io: SocketIOServer;
+  private logger: Logger;
+  private connectedUsers: Map<string, string>; // Username -> Socket ID
+  private socketToUser: Map<string, string>; // Socket ID -> Username
+  private userSessions: Map<string, UserSession>; // Username -> Session Data
+
+  constructor(io: SocketIOServer, logger: Logger) {
     this.io = io;
     this.logger = logger;
-    this.connectedUsers = new Map(); // Username -> Socket ID
-    this.socketToUser = new Map(); // Socket ID -> Username
-    this.userSessions = new Map(); // Username -> Session Data
+    this.connectedUsers = new Map();
+    this.socketToUser = new Map();
+    this.userSessions = new Map();
   }
 
   // Handle user connection
-  handleConnection(socket) {
+  handleConnection(socket: Socket): void {
     this.logger.info(`New socket connection: ${socket.id}`);
   }
 
   // Handle user disconnection
-  handleDisconnection(socket) {
+  handleDisconnection(socket: Socket): void {
     const username = this.socketToUser.get(socket.id);
     if (username) {
       this.logger.info(`User ${username} disconnected`);
@@ -37,7 +46,7 @@ class UserService {
   }
 
   // Register user
-  registerUser(socket, username) {
+  registerUser(socket: Socket, username: string): boolean {
     if (!username) {
       socket.emit('error', { message: 'Username is required' });
       return false;
@@ -59,7 +68,7 @@ class UserService {
     this.socketToUser.set(socket.id, username);
     
     // Create or update session
-    const session = {
+    const session: UserSession = {
       username,
       connectedAt: Date.now(),
       lastSeen: Date.now(),
@@ -77,7 +86,7 @@ class UserService {
   }
 
   // Unregister user
-  unregisterUser(username) {
+  unregisterUser(username: string): boolean {
     const socketId = this.connectedUsers.get(username);
     if (socketId) {
       this.connectedUsers.delete(username);
@@ -97,57 +106,58 @@ class UserService {
   }
 
   // Get user by socket
-  getUserBySocket(socketId) {
+  getUserBySocket(socketId: string): string | undefined {
     return this.socketToUser.get(socketId);
   }
 
   // Get socket by user
-  getSocketByUser(username) {
+  getSocketByUser(username: string): Socket | null {
     const socketId = this.connectedUsers.get(username);
-    return socketId ? this.io.sockets.sockets.get(socketId) : null;
+    return socketId ? this.io.sockets.sockets.get(socketId) || null : null;
   }
 
   // Check if user is online
-  isUserOnline(username) {
+  isUserOnline(username: string): boolean {
     return this.connectedUsers.has(username);
   }
 
   // Get online users
-  getOnlineUsers() {
+  getOnlineUsers(): string[] {
     return Array.from(this.connectedUsers.keys());
   }
 
   // Get user session
-  getUserSession(username) {
+  getUserSession(username: string): UserSession | undefined {
     return this.userSessions.get(username);
   }
 
   // Get all sessions
-  getAllSessions() {
+  getAllSessions(): UserSession[] {
     return Array.from(this.userSessions.values());
   }
 
   // Filter admin accounts
-  filterAdminAccounts(users) {
+  filterAdminAccounts(users: string[]): string[] {
     return users.filter(user => !config.admins.includes(user));
   }
 
   // Broadcast user status
-  broadcastUserStatus(username, isOnline) {
-    this.io.emit('userStatus', {
+  broadcastUserStatus(username: string, isOnline: boolean): void {
+    const event: UserStatusEvent = {
       username,
       isOnline,
       timestamp: Date.now()
-    });
+    };
+    this.io.emit('userStatus', event);
   }
 
   // Get connected users count
-  getConnectedUsersCount() {
+  getConnectedUsersCount(): number {
     return this.connectedUsers.size;
   }
 
   // Get service status
-  getStatus() {
+  getStatus(): UserServiceStatus {
     return {
       connectedUsers: this.connectedUsers.size,
       totalSessions: this.userSessions.size,
@@ -157,9 +167,9 @@ class UserService {
   }
 
   // Clean up old sessions (optional)
-  cleanupOldSessions(maxAge = 24 * 60 * 60 * 1000) { // 24 hours
+  cleanupOldSessions(maxAge: number = 24 * 60 * 60 * 1000): void { // 24 hours
     const now = Date.now();
-    const toDelete = [];
+    const toDelete: string[] = [];
     
     for (const [username, session] of this.userSessions.entries()) {
       if (now - session.lastSeen > maxAge && !this.isUserOnline(username)) {
@@ -177,4 +187,4 @@ class UserService {
   }
 }
 
-module.exports = UserService; 
+export default UserService; 
