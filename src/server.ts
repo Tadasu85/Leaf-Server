@@ -100,11 +100,13 @@ io.on('connection', (socket) => {
 
   // Chat events
   socket.on('joinChatChannel', (data: JoinChatChannelData) => {
+    logger.info(`[Server] Received joinChatChannel event from socket ${socket.id}: ${JSON.stringify(data)}`);
     const username = userService.getUserBySocket(socket.id);
     if (!username) {
       logger.warn('Attempted to join chat channel without username');
       return;
     }
+    logger.info(`[Server] Calling chatService.joinChannel for user ${username}`);
     chatService.joinChannel(socket, { ...data, username });
   });
   
