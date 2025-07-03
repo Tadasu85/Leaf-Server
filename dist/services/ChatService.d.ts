@@ -24,6 +24,7 @@ declare class ChatService implements ChatServiceInterface {
     private broadcastToChannel;
     getChannelInfo(channelId: string): ChatChannel | null;
     getAllChannels(): [string, ChatChannel][];
+    private cleanupStalePlayers;
     getStatus(): ChatServiceStatus;
 }
 export default ChatService;
