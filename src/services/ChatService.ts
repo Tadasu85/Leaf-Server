@@ -29,6 +29,11 @@ class ChatService implements ChatServiceInterface {
     this.chatChannels = new Map();
     this.socketToUser = new Map();
     this.userToSocket = new Map();
+    
+    // Set up periodic cleanup of stale players
+    setInterval(() => {
+      this.cleanupStalePlayers();
+    }, 30000); // Clean up every 30 seconds
   }
 
   // Handle user connection
@@ -84,6 +89,18 @@ class ChatService implements ChatServiceInterface {
     }
     
     const channel = this.chatChannels.get(channelId)!;
+    
+    // Clean up any stale entries - remove players who are no longer connected
+    const connectedPlayers = Array.from(this.userToSocket.keys());
+    const oldPlayers = [...channel.players];
+    channel.players = channel.players.filter(player => connectedPlayers.includes(player));
+    
+    // Log if any players were cleaned up
+    const removedPlayers = oldPlayers.filter(player => !connectedPlayers.includes(player));
+    if (removedPlayers.length > 0) {
+      this.logger.info(`[ChatService] Cleaned up disconnected players: ${JSON.stringify(removedPlayers)}`);
+    }
+    
     const wasAlreadyInChannel = channel.players.includes(username);
     
     this.logger.info(`[ChatService] User ${username} joining channel ${channelId}`);
@@ -250,6 +267,46 @@ class ChatService implements ChatServiceInterface {
   // Get all channels
   getAllChannels(): [string, ChatChannel][] {
     return Array.from(this.chatChannels.entries());
+  }
+
+  // Clean up stale players from all channels
+  private cleanupStalePlayers(): void {
+    const connectedPlayers = Array.from(this.userToSocket.keys());
+    let totalCleaned = 0;
+    
+    for (const [channelId, channel] of this.chatChannels.entries()) {
+      const oldPlayers = [...channel.players];
+      channel.players = channel.players.filter(player => connectedPlayers.includes(player));
+      
+      const removedPlayers = oldPlayers.filter(player => !connectedPlayers.includes(player));
+      if (removedPlayers.length > 0) {
+        totalCleaned += removedPlayers.length;
+        this.logger.info(`[ChatService] Periodic cleanup removed from ${channelId}: ${JSON.stringify(removedPlayers)}`);
+        
+        // Broadcast individual playerLeft events for each removed player
+        removedPlayers.forEach(removedPlayer => {
+          const playerLeftEvent: PlayerLeftEvent = {
+            username: removedPlayer,
+            players: channel.players,
+            channelId
+          };
+          this.logger.info(`[ChatService] Broadcasting playerLeft for periodic cleanup: ${JSON.stringify(playerLeftEvent)}`);
+          this.broadcastToChannel(channelId, 'playerLeft', playerLeftEvent);
+        });
+        
+        // Also broadcast updated player list to remaining players
+        const chatChannelState: ChatChannelState = {
+          channelId,
+          players: channel.players,
+          lastUpdated: channel.lastUpdated
+        };
+        this.broadcastToChannel(channelId, 'chatChannelState', chatChannelState);
+      }
+    }
+    
+    if (totalCleaned > 0) {
+      this.logger.info(`[ChatService] Periodic cleanup completed, removed ${totalCleaned} stale players total`);
+    }
   }
 
   // Get service status
