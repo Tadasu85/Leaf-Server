@@ -2,15 +2,18 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 class ChatService {
     constructor(io, logger) {
+        this.cleanupInterval = null;
         this.io = io;
         this.logger = logger;
         this.chatChannels = new Map();
         this.socketToUser = new Map();
         this.userToSocket = new Map();
-        // Set up periodic cleanup of stale players
-        setInterval(() => {
-            this.cleanupStalePlayers();
-        }, 30000); // Clean up every 30 seconds
+        // Set up periodic cleanup of stale players (only in non-test environments)
+        if (process.env['NODE_ENV'] !== 'test') {
+            this.cleanupInterval = setInterval(() => {
+                this.cleanupStalePlayers();
+            }, 30000); // Clean up every 30 seconds
+        }
     }
     // Handle user connection
     handleConnection(_socket) {
@@ -248,6 +251,16 @@ class ChatService {
             connectedUsers: this.socketToUser.size,
             channels: Array.from(this.chatChannels.keys())
         };
+    }
+    // Cleanup method to stop intervals and clear data
+    cleanup() {
+        if (this.cleanupInterval) {
+            clearInterval(this.cleanupInterval);
+            this.cleanupInterval = null;
+        }
+        this.chatChannels.clear();
+        this.socketToUser.clear();
+        this.userToSocket.clear();
     }
 }
 exports.default = ChatService;

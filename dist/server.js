@@ -3,20 +3,47 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.io = exports.server = exports.app = void 0;
+exports.io = exports.server = exports.app = exports.cleanup = void 0;
 const socket_io_1 = require("socket.io");
 const http_1 = require("http");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 // import config from './config'; // Not currently used
 const ChatService_1 = __importDefault(require("./services/ChatService"));
 const UserService_1 = __importDefault(require("./services/UserService"));
 const Logger_1 = __importDefault(require("./utils/Logger"));
 // Initialize logger
 const logger = new Logger_1.default();
+// Rate limiting configuration
+const createRateLimiter = (windowMs, max, message) => {
+    return (0, express_rate_limit_1.default)({
+        windowMs,
+        max,
+        message: { error: message },
+        standardHeaders: true,
+        legacyHeaders: false,
+        handler: (req, res) => {
+            logger.warn(`Rate limit exceeded for IP: ${req.ip}`);
+            res.status(429).json({ error: message });
+        }
+    });
+};
+// General API rate limiting (15 minutes, 100 requests)
+const apiLimiter = createRateLimiter(15 * 60 * 1000, // 15 minutes
+100, // 100 requests per window
+'Too many requests from this IP');
+// Stricter rate limiting for socket connections (1 minute, 10 connections)
+const socketLimiter = createRateLimiter(1 * 60 * 1000, // 1 minute
+10, // 10 socket connections per minute per IP
+'Too many socket connections from this IP');
 // Create Express app
 const app = (0, express_1.default)();
 exports.app = app;
+// Apply rate limiting to all routes
+app.use(apiLimiter);
+// Apply stricter rate limiting to socket.io endpoint
+app.use('/socket.io/', socketLimiter);
 app.use((0, cors_1.default)({
     origin: process.env['NODE_ENV'] === 'production'
         ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
@@ -27,6 +54,8 @@ app.use((0, cors_1.default)({
 // Create HTTP server
 const server = (0, http_1.createServer)(app);
 exports.server = server;
+// Socket.IO rate limiting storage
+const socketRateLimits = new Map();
 // Create Socket.IO server
 const io = new socket_io_1.Server(server, {
     cors: {
@@ -53,6 +82,12 @@ exports.io = io;
 // Initialize services
 const chatService = new ChatService_1.default(io, logger);
 const userService = new UserService_1.default(io, logger);
+// Cleanup function for tests
+const cleanup = () => {
+    chatService.cleanup();
+    // Add any other cleanup needed for UserService if it has intervals
+};
+exports.cleanup = cleanup;
 // Error handling
 server.on('error', (error) => {
     logger.error('Server error:', error);
@@ -63,13 +98,26 @@ io.engine.on('connection_error', (err) => {
 // Socket connection handling
 io.on('connection', (socket) => {
     const username = socket.handshake.query['username'];
-    logger.info(`New socket connection: ${socket.id}, username: ${username}`);
+    const userIP = socket.handshake.address;
+    logger.info(`New socket connection: ${socket.id}, username: ${username}, IP: ${userIP}`);
     // Validate username is provided
     if (!username) {
         logger.warn('Connection attempt without username - disconnecting');
         socket.disconnect();
         return;
     }
+    // Initialize rate limiting for this user
+    if (!socketRateLimits.has(userIP)) {
+        socketRateLimits.set(userIP, {
+            messageCount: 0,
+            lastReset: Date.now(),
+            connections: 0,
+            joinLeaveCount: 0,
+            lastJoinLeaveReset: Date.now()
+        });
+    }
+    const userLimit = socketRateLimits.get(userIP);
+    userLimit.connections++;
     // Initialize user and register with username from query
     userService.handleConnection(socket);
     userService.registerUser(socket, username);
@@ -87,8 +135,20 @@ io.on('connection', (socket) => {
             socket.emit('registered', response);
         }
     });
-    // Chat events
+    // Chat events with rate limiting
     socket.on('joinChatChannel', (data) => {
+        // Rate limit join/leave operations
+        const now = Date.now();
+        if (now - userLimit.lastJoinLeaveReset > 60000) { // 1 minute
+            userLimit.joinLeaveCount = 0;
+            userLimit.lastJoinLeaveReset = now;
+        }
+        if (userLimit.joinLeaveCount > 20) { // max 20 join/leave operations per minute
+            logger.warn(`Rate limit exceeded for join/leave operations: ${socket.handshake.query['username']} (${userIP})`);
+            socket.emit('error', { message: 'Too many room changes. Please wait a moment.' });
+            return;
+        }
+        userLimit.joinLeaveCount++;
         logger.info(`[Server] Received joinChatChannel event from socket ${socket.id}: ${JSON.stringify(data)}`);
         const username = userService.getUserBySocket(socket.id);
         if (!username) {
@@ -99,6 +159,18 @@ io.on('connection', (socket) => {
         chatService.joinChannel(socket, { ...data, username });
     });
     socket.on('leaveChatChannel', (data) => {
+        // Rate limit join/leave operations
+        const now = Date.now();
+        if (now - userLimit.lastJoinLeaveReset > 60000) { // 1 minute
+            userLimit.joinLeaveCount = 0;
+            userLimit.lastJoinLeaveReset = now;
+        }
+        if (userLimit.joinLeaveCount > 20) { // max 20 join/leave operations per minute
+            logger.warn(`Rate limit exceeded for join/leave operations: ${socket.handshake.query['username']} (${userIP})`);
+            socket.emit('error', { message: 'Too many room changes. Please wait a moment.' });
+            return;
+        }
+        userLimit.joinLeaveCount++;
         const username = userService.getUserBySocket(socket.id);
         if (!username) {
             logger.warn('Attempted to leave chat channel without username');
@@ -107,6 +179,18 @@ io.on('connection', (socket) => {
         chatService.leaveChannel(socket, { ...data, username });
     });
     socket.on('chatMessage', (data) => {
+        // Rate limit chat messages
+        const now = Date.now();
+        if (now - userLimit.lastReset > 60000) { // 1 minute
+            userLimit.messageCount = 0;
+            userLimit.lastReset = now;
+        }
+        if (userLimit.messageCount > 30) { // max 30 messages per minute
+            logger.warn(`Rate limit exceeded for chat messages: ${socket.handshake.query['username']} (${userIP})`);
+            socket.emit('error', { message: 'Too many messages. Please wait a moment.' });
+            return;
+        }
+        userLimit.messageCount++;
         const username = userService.getUserBySocket(socket.id);
         if (!username) {
             logger.warn('Attempted to send chat message without username');
@@ -115,6 +199,18 @@ io.on('connection', (socket) => {
         chatService.handleMessage(socket, { ...data, username });
     });
     socket.on('emote', (data) => {
+        // Rate limit emotes
+        const now = Date.now();
+        if (now - userLimit.lastReset > 60000) { // 1 minute
+            userLimit.messageCount = 0;
+            userLimit.lastReset = now;
+        }
+        if (userLimit.messageCount > 30) { // max 30 emotes per minute
+            logger.warn(`Rate limit exceeded for emotes: ${socket.handshake.query['username']} (${userIP})`);
+            socket.emit('error', { message: 'Too many emotes. Please wait a moment.' });
+            return;
+        }
+        userLimit.messageCount++;
         const username = userService.getUserBySocket(socket.id);
         if (!username) {
             logger.warn('Attempted to send emote without username');
@@ -128,6 +224,13 @@ io.on('connection', (socket) => {
     });
     // Handle disconnection
     socket.on('disconnect', () => {
+        // Clean up rate limiting data
+        if (userLimit) {
+            userLimit.connections--;
+            if (userLimit.connections <= 0) {
+                socketRateLimits.delete(userIP);
+            }
+        }
         userService.handleDisconnection(socket);
         chatService.handleDisconnection(socket);
         logger.info(`Socket disconnected: ${socket.id}`);
@@ -156,6 +259,11 @@ if (process.env['NODE_ENV'] !== 'test') {
     server.listen(PORT, () => {
         logger.info(`Server running on port ${PORT}`);
         logger.info(`Environment: ${process.env['NODE_ENV'] || 'development'}`);
+        logger.info('Rate limiting enabled:');
+        logger.info('- API: 100 requests per 15 minutes');
+        logger.info('- Socket connections: 10 per minute');
+        logger.info('- Chat messages: 30 per minute');
+        logger.info('- Room changes: 20 per minute');
     });
 }
 //# sourceMappingURL=server.js.map

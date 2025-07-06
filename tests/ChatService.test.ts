@@ -22,7 +22,10 @@ describe('ChatService', () => {
       emit: jest.fn(),
       join: jest.fn(),
       leave: jest.fn(),
-      rooms: new Set(['test-socket-id'])
+      rooms: new Set(['test-socket-id']),
+      to: jest.fn().mockReturnValue({
+        emit: jest.fn()
+      })
     };
     
     // Mock the socket.rooms behavior for channel tracking
@@ -35,6 +38,8 @@ describe('ChatService', () => {
   });
 
   afterEach(() => {
+    // Clean up the chat service to stop intervals
+    chatService.cleanup();
     server.close();
   });
 
@@ -188,7 +193,16 @@ describe('ChatService', () => {
   describe('getAllChannels', () => {
     it('should return all channels', () => {
       chatService.joinChannel(mockSocket, { channelId: 'channel1', username: 'user1' });
-      const mockSocket2: any = { id: 'socket2', emit: jest.fn(), join: jest.fn(), leave: jest.fn(), rooms: new Set(['socket2']) };
+      const mockSocket2: any = { 
+        id: 'socket2', 
+        emit: jest.fn(), 
+        join: jest.fn(), 
+        leave: jest.fn(), 
+        rooms: new Set(['socket2']),
+        to: jest.fn().mockReturnValue({
+          emit: jest.fn()
+        })
+      };
       chatService.joinChannel(mockSocket2, { channelId: 'channel2', username: 'user2' });
       
       const channels = chatService.getAllChannels();
@@ -207,7 +221,16 @@ describe('ChatService', () => {
   describe('getStatus', () => {
     it('should return service status', () => {
       chatService.joinChannel(mockSocket, { channelId: 'channel1', username: 'user1' });
-      const mockSocket2: any = { id: 'socket2', emit: jest.fn(), join: jest.fn(), leave: jest.fn(), rooms: new Set(['socket2']) };
+      const mockSocket2: any = { 
+        id: 'socket2', 
+        emit: jest.fn(), 
+        join: jest.fn(), 
+        leave: jest.fn(), 
+        rooms: new Set(['socket2']),
+        to: jest.fn().mockReturnValue({
+          emit: jest.fn()
+        })
+      };
       chatService.joinChannel(mockSocket2, { channelId: 'channel2', username: 'user2' });
       
       const status = chatService.getStatus();

@@ -7,6 +7,7 @@ declare class ChatService implements ChatServiceInterface {
     private chatChannels;
     private socketToUser;
     private userToSocket;
+    private cleanupInterval;
     constructor(io: SocketIOServer, logger: Logger);
     handleConnection(_socket: Socket): void;
     handleDisconnection(socket: Socket): void;
@@ -26,6 +27,7 @@ declare class ChatService implements ChatServiceInterface {
     getAllChannels(): [string, ChatChannel][];
     private cleanupStalePlayers;
     getStatus(): ChatServiceStatus;
+    cleanup(): void;
 }
 export default ChatService;
 //# sourceMappingURL=ChatService.d.ts.map
