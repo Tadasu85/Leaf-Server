@@ -22,6 +22,7 @@ class ChatService implements ChatServiceInterface {
   private chatChannels: Map<string, ChatChannel>; // Channel ID -> Channel Data
   private socketToUser: Map<string, string>; // Socket ID -> Username
   private userToSocket: Map<string, string>; // Username -> Socket ID
+  private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(io: SocketIOServer, logger: Logger) {
     this.io = io;
@@ -30,10 +31,12 @@ class ChatService implements ChatServiceInterface {
     this.socketToUser = new Map();
     this.userToSocket = new Map();
     
-    // Set up periodic cleanup of stale players
-    setInterval(() => {
-      this.cleanupStalePlayers();
-    }, 30000); // Clean up every 30 seconds
+    // Set up periodic cleanup of stale players (only in non-test environments)
+    if (process.env['NODE_ENV'] !== 'test') {
+      this.cleanupInterval = setInterval(() => {
+        this.cleanupStalePlayers();
+      }, 30000); // Clean up every 30 seconds
+    }
   }
 
   // Handle user connection
@@ -316,6 +319,17 @@ class ChatService implements ChatServiceInterface {
       connectedUsers: this.socketToUser.size,
       channels: Array.from(this.chatChannels.keys())
     };
+  }
+
+  // Cleanup method to stop intervals and clear data
+  cleanup(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+    this.chatChannels.clear();
+    this.socketToUser.clear();
+    this.userToSocket.clear();
   }
 }
 

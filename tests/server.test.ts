@@ -1,7 +1,12 @@
 import request from 'supertest';
-import { app } from '../src/server';
+import { app, cleanup } from '../src/server';
 
 describe('Server Integration Tests', () => {
+  afterAll(() => {
+    // Clean up any intervals created by services
+    cleanup();
+  });
+
   describe('Health Check Endpoint', () => {
     it('should return health status', async () => {
       const response = await request(app).get('/health');
