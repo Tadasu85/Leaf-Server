@@ -4,7 +4,7 @@
   "description": "Server for Leaf game",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "npm install && tsc",
     "start": "node dist/server.js",
     "dev": "tsc && nodemon dist/server.js",
     "dev:watch": "tsc --watch",
