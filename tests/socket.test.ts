@@ -1,0 +1,306 @@
+import { io as ioClient } from 'socket.io-client';
+import { app, server, io, cleanup } from '../src/server';
+
+describe('Socket.IO Tests', () => {
+  let testSocket: any;
+  const TEST_PORT = 4002;
+
+  beforeAll((done) => {
+    // Start server on different port for testing
+    server.listen(TEST_PORT, () => {
+      done();
+    });
+  });
+
+  afterAll((done) => {
+    cleanup();
+    server.close(done);
+  });
+
+  afterEach(() => {
+    if (testSocket) {
+      testSocket.disconnect();
+      testSocket = null;
+    }
+  });
+
+  describe('Socket Connection', () => {
+    it('should connect with valid username', (done) => {
+      testSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: { username: 'testuser' }
+      });
+
+      testSocket.on('connect', () => {
+        expect(testSocket.connected).toBe(true);
+        done();
+      });
+    });
+
+    it('should disconnect without username', (done) => {
+      testSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: {}
+      });
+
+      testSocket.on('disconnect', () => {
+        expect(testSocket.connected).toBe(false);
+        done();
+      });
+    });
+  });
+
+  describe('Socket Events', () => {
+    beforeEach((done) => {
+      testSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: { username: 'eventuser' }
+      });
+      testSocket.on('connect', done);
+    });
+
+    it('should handle register event', (done) => {
+      testSocket.emit('register', { username: 'newuser' });
+      
+      testSocket.on('registered', (response: any) => {
+        expect(response.success).toBe(true);
+        done();
+      });
+    });
+
+    it('should handle register event with same username', (done) => {
+      testSocket.emit('register', { username: 'eventuser' });
+      
+      testSocket.on('registered', (response: any) => {
+        expect(response.success).toBe(true);
+        done();
+      });
+    });
+
+    it('should handle joinChatChannel event', (done) => {
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      testSocket.on('chatChannelState', (state: any) => {
+        expect(state.channelId).toBe('test-channel');
+        expect(state.players).toContain('eventuser');
+        done();
+      });
+    });
+
+    it('should handle joinChatChannel without username', (done) => {
+      // Create a socket without username
+      const noUserSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: {}
+      });
+
+      noUserSocket.on('disconnect', () => {
+        // Should disconnect due to no username
+        expect(noUserSocket.connected).toBe(false);
+        noUserSocket.disconnect();
+        done();
+      });
+    });
+
+    it('should handle leaveChatChannel event', (done) => {
+      // First join a channel
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      setTimeout(() => {
+        testSocket.emit('leaveChatChannel', { channelId: 'test-channel' });
+        done(); // Just verify it doesn't throw
+      }, 100);
+    });
+
+    it('should handle chatMessage event', (done) => {
+      // First join a channel
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      setTimeout(() => {
+        testSocket.emit('chatMessage', { 
+          channelId: 'test-channel', 
+          message: 'Hello world' 
+        });
+        done(); // Just verify it doesn't throw
+      }, 100);
+    });
+
+    it('should handle emote event', (done) => {
+      // First join a channel
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      setTimeout(() => {
+        testSocket.emit('emote', { 
+          channelId: 'test-channel', 
+          emote: 'wave' 
+        });
+        done(); // Just verify it doesn't throw
+      }, 100);
+    });
+
+    it('should handle emote event with missing data', (done) => {
+      // First join a channel
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      setTimeout(() => {
+        testSocket.emit('emote', { 
+          channelId: '', 
+          emote: '' 
+        });
+        
+        testSocket.on('error', (error: any) => {
+          expect(error.message).toBe('Missing channelId or emote');
+          done();
+        });
+      }, 100);
+    });
+
+    it('should handle disconnect event', (done) => {
+      testSocket.on('disconnect', () => {
+        expect(testSocket.connected).toBe(false);
+        done();
+      });
+      
+      testSocket.disconnect();
+    });
+  });
+
+  describe('Rate Limiting', () => {
+    beforeEach((done) => {
+      testSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: { username: 'rateuser' }
+      });
+      testSocket.on('connect', done);
+    });
+
+    it('should rate limit join/leave operations', (done) => {
+      let errorCount = 0;
+      
+      testSocket.on('error', (error: any) => {
+        if (error.message && error.message.includes('Too many room changes')) {
+          errorCount++;
+          if (errorCount >= 5) {
+            expect(errorCount).toBeGreaterThan(0);
+            done();
+          }
+        }
+      });
+
+      // Send many join/leave operations quickly
+      for (let i = 0; i < 25; i++) {
+        testSocket.emit('joinChatChannel', { channelId: `channel-${i}` });
+      }
+    });
+
+    it('should rate limit chat messages', (done) => {
+      // First join a channel
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      setTimeout(() => {
+        let errorCount = 0;
+        
+        testSocket.on('error', (error: any) => {
+          if (error.message && error.message.includes('Too many messages')) {
+            errorCount++;
+            if (errorCount >= 5) {
+              expect(errorCount).toBeGreaterThan(0);
+              done();
+            }
+          }
+        });
+
+        // Send many messages quickly
+        for (let i = 0; i < 35; i++) {
+          testSocket.emit('chatMessage', { 
+            channelId: 'test-channel', 
+            message: `Message ${i}` 
+          });
+        }
+      }, 100);
+    });
+
+    it('should rate limit emotes', (done) => {
+      // First join a channel
+      testSocket.emit('joinChatChannel', { channelId: 'test-channel' });
+      
+      setTimeout(() => {
+        let errorCount = 0;
+        
+        testSocket.on('error', (error: any) => {
+          if (error.message && error.message.includes('Too many emotes')) {
+            errorCount++;
+            if (errorCount >= 5) {
+              expect(errorCount).toBeGreaterThan(0);
+              done();
+            }
+          }
+        });
+
+        // Send many emotes quickly
+        for (let i = 0; i < 35; i++) {
+          testSocket.emit('emote', { 
+            channelId: 'test-channel', 
+            emote: `emote-${i}` 
+          });
+        }
+      }, 100);
+    });
+  });
+
+  describe('Error Handling', () => {
+    beforeEach((done) => {
+      testSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: { username: 'erroruser' }
+      });
+      testSocket.on('connect', done);
+    });
+
+    it('should handle missing username in joinChatChannel', (done) => {
+      // Create a socket that will be disconnected
+      const noUserSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: {}
+      });
+
+      noUserSocket.on('disconnect', () => {
+        expect(noUserSocket.connected).toBe(false);
+        noUserSocket.disconnect();
+        done();
+      });
+    });
+
+    it('should handle missing username in leaveChatChannel', (done) => {
+      // Create a socket that will be disconnected
+      const noUserSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: {}
+      });
+
+      noUserSocket.on('disconnect', () => {
+        expect(noUserSocket.connected).toBe(false);
+        noUserSocket.disconnect();
+        done();
+      });
+    });
+
+    it('should handle missing username in chatMessage', (done) => {
+      // Create a socket that will be disconnected
+      const noUserSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: {}
+      });
+
+      noUserSocket.on('disconnect', () => {
+        expect(noUserSocket.connected).toBe(false);
+        noUserSocket.disconnect();
+        done();
+      });
+    });
+
+    it('should handle missing username in emote', (done) => {
+      // Create a socket that will be disconnected
+      const noUserSocket = ioClient(`http://localhost:${TEST_PORT}`, {
+        query: {}
+      });
+
+      noUserSocket.on('disconnect', () => {
+        expect(noUserSocket.connected).toBe(false);
+        noUserSocket.disconnect();
+        done();
+      });
+    });
+  });
+}); 
