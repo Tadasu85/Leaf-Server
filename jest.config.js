@@ -22,7 +22,7 @@ module.exports = {
   verbose: true,
   forceExit: true, // Force Jest to exit after all tests complete
   detectOpenHandles: true, // Detect open handles that prevent Jest from exiting
-  maxWorkers: 1, // Run tests serially to prevent port conflicts
+  maxWorkers: 1, // Run tests serially to prevent port conflicts and rate limiting issues
   collectCoverage: true,
   coverageProvider: 'v8'
 }; 
