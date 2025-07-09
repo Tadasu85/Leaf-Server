@@ -34,7 +34,7 @@ lint:
     - echo "Linting complete - TypeScript compilation successful"
   artifacts:
     reports:
-      junit: leaf_server/coverage/junit.xml
+      junit: coverage/junit.xml
     expire_in: 1 week
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -57,10 +57,10 @@ test:
     reports:
       coverage_report:
         coverage_format: cobertura
-        path: leaf_server/coverage/cobertura-coverage.xml
-      junit: leaf_server/coverage/junit.xml
+        path: coverage/cobertura-coverage.xml
+      junit: coverage/junit.xml
     paths:
-      - leaf_server/coverage/
+      - coverage/
     expire_in: 1 week
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
@@ -81,9 +81,9 @@ build:
     - ls -la dist/
   artifacts:
     paths:
-      - leaf_server/dist/
-      - leaf_server/package.json
-      - leaf_server/package-lock.json
+      - dist/
+      - package.json
+      - package-lock.json
     expire_in: 1 week
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
