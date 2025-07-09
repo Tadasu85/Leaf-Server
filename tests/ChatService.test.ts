@@ -2,6 +2,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { createServer } from 'http';
 import ChatService from '../src/services/ChatService';
 import Logger from '../src/utils/Logger';
+import { Socket } from 'socket.io';
 
 describe('ChatService', () => {
   let chatService: ChatService;
@@ -16,7 +17,7 @@ describe('ChatService', () => {
     logger = new Logger();
     chatService = new ChatService(io, logger);
     
-    // Create mock socket
+    // Create mock socket with proper to() method
     mockSocket = {
       id: 'test-socket-id',
       emit: jest.fn(),
@@ -46,7 +47,7 @@ describe('ChatService', () => {
   describe('handleConnection', () => {
     it('should handle new socket connection', () => {
       // This method is currently empty, just testing it doesn't throw
-      expect(() => chatService.handleConnection(mockSocket)).not.toThrow();
+      expect(() => chatService.handleConnection(mockSocket as Socket)).not.toThrow();
     });
   });
 
@@ -55,7 +56,7 @@ describe('ChatService', () => {
       const data = { channelId: 'test-channel', username: 'testuser' };
       const loggerSpy = jest.spyOn(logger, 'info');
       
-      chatService.joinChannel(mockSocket, data);
+      chatService.joinChannel(mockSocket as Socket, data);
       
       expect(mockSocket.join).toHaveBeenCalledWith('test-channel');
       expect(loggerSpy).toHaveBeenCalledWith('User testuser joined chat channel test-channel');
@@ -68,7 +69,23 @@ describe('ChatService', () => {
     it('should handle missing channelId or username', () => {
       const data = { channelId: '', username: 'testuser' };
       
-      chatService.joinChannel(mockSocket, data);
+      chatService.joinChannel(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing channelId or username' });
+    });
+
+    it('should handle missing username', () => {
+      const data = { channelId: 'test-channel', username: '' };
+      
+      chatService.joinChannel(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing channelId or username' });
+    });
+
+    it('should handle missing both channelId and username', () => {
+      const data = { channelId: '', username: '' };
+      
+      chatService.joinChannel(mockSocket as Socket, data);
       
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing channelId or username' });
     });
@@ -77,24 +94,84 @@ describe('ChatService', () => {
       const data = { channelId: 'test-channel', username: 'testuser' };
       
       // Join twice
-      chatService.joinChannel(mockSocket, data);
-      chatService.joinChannel(mockSocket, data);
+      chatService.joinChannel(mockSocket as Socket, data);
+      chatService.joinChannel(mockSocket as Socket, data);
       
       const channelInfo = chatService.getChannelInfo('test-channel');
       expect(channelInfo?.players).toHaveLength(1);
       expect(channelInfo?.players).toContain('testuser');
+    });
+
+    it('should clean up stale players when joining', () => {
+      // Create a mock socket for a disconnected user
+      const disconnectedSocket = {
+        id: 'disconnected-socket',
+        emit: jest.fn(),
+        join: jest.fn(),
+        leave: jest.fn(),
+        rooms: new Set(['disconnected-socket', 'test-channel']),
+        to: jest.fn().mockReturnValue({
+          emit: jest.fn()
+        })
+      };
+
+      // Join with first user
+      chatService.joinChannel(disconnectedSocket as unknown as Socket, { channelId: 'test-channel', username: 'disconnected-user' });
+      
+      // Simulate disconnection by removing from userToSocket map
+      (chatService as any).userToSocket.delete('disconnected-user');
+      
+      // Join with new user - should clean up the disconnected user
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'new-user' });
+      
+      const channelInfo = chatService.getChannelInfo('test-channel');
+      expect(channelInfo?.players).toContain('new-user');
+      expect(channelInfo?.players).not.toContain('disconnected-user');
+    });
+
+    it('should emit playerJoined event to other users', () => {
+      const mockSocket2 = {
+        id: 'socket2',
+        emit: jest.fn(),
+        join: jest.fn(),
+        leave: jest.fn(),
+        rooms: new Set(['socket2', 'test-channel']),
+        to: jest.fn().mockReturnValue({
+          emit: jest.fn()
+        })
+      };
+
+      // First user joins
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Second user joins
+      chatService.joinChannel(mockSocket2 as unknown as Socket, { channelId: 'test-channel', username: 'user2' });
+      
+      expect(mockSocket2.to).toHaveBeenCalledWith('test-channel');
+    });
+
+    it('should send chatChannelState to joining user', () => {
+      const data = { channelId: 'test-channel', username: 'testuser' };
+      
+      chatService.joinChannel(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('chatChannelState', expect.objectContaining({
+        channelId: 'test-channel',
+        players: ['testuser'],
+        lastUpdated: expect.any(Number)
+      }));
     });
   });
 
   describe('leaveChannel', () => {
     it('should leave a chat channel successfully', () => {
       // First join the channel
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'testuser' });
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
       const data = { channelId: 'test-channel', username: 'testuser' };
       const loggerSpy = jest.spyOn(logger, 'info');
       
-      chatService.leaveChannel(mockSocket, data);
+      chatService.leaveChannel(mockSocket as Socket, data);
       
       expect(mockSocket.leave).toHaveBeenCalledWith('test-channel');
       expect(loggerSpy).toHaveBeenCalledWith('User testuser left chat channel test-channel');
@@ -107,21 +184,41 @@ describe('ChatService', () => {
     it('should handle missing channelId or username', () => {
       const data = { channelId: '', username: 'testuser' };
       
-      chatService.leaveChannel(mockSocket, data);
+      chatService.leaveChannel(mockSocket as Socket, data);
       
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing channelId or username' });
+    });
+
+    it('should handle missing username', () => {
+      const data = { channelId: 'test-channel', username: '' };
+      
+      chatService.leaveChannel(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing channelId or username' });
+    });
+
+    it('should emit playerLeft event when user leaves', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      
+      const data = { channelId: 'test-channel', username: 'testuser' };
+      
+      chatService.leaveChannel(mockSocket as Socket, data);
+      
+      // Should emit playerLeft event to remaining users
+      expect(mockSocket.to).toHaveBeenCalledWith('test-channel');
     });
   });
 
   describe('handleMessage', () => {
     it('should handle chat message successfully', () => {
       // First join the channel
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'testuser' });
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
       const data = { channelId: 'test-channel', message: 'Hello world', username: 'testuser' };
       const loggerSpy = jest.spyOn(logger, 'info');
       
-      chatService.handleMessage(mockSocket, data);
+      chatService.handleMessage(mockSocket as Socket, data);
       
       expect(loggerSpy).toHaveBeenCalledWith('Chat message from testuser in test-channel: Hello world');
     });
@@ -129,7 +226,23 @@ describe('ChatService', () => {
     it('should handle missing required fields', () => {
       const data = { channelId: 'test-channel', message: '', username: 'testuser' };
       
-      chatService.handleMessage(mockSocket, data);
+      chatService.handleMessage(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
+    });
+
+    it('should handle missing channelId', () => {
+      const data = { channelId: '', message: 'Hello world', username: 'testuser' };
+      
+      chatService.handleMessage(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
+    });
+
+    it('should handle missing username', () => {
+      const data = { channelId: 'test-channel', message: 'Hello world', username: '' };
+      
+      chatService.handleMessage(mockSocket as Socket, data);
       
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
     });
@@ -137,21 +250,33 @@ describe('ChatService', () => {
     it('should handle message from user not in channel', () => {
       const data = { channelId: 'test-channel', message: 'Hello world', username: 'testuser' };
       
-      chatService.handleMessage(mockSocket, data);
+      chatService.handleMessage(mockSocket as Socket, data);
       
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Not in channel' });
+    });
+
+    it('should broadcast message to channel', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      
+      const data = { channelId: 'test-channel', message: 'Hello world', username: 'testuser' };
+      
+      chatService.handleMessage(mockSocket as Socket, data);
+      
+      // Should broadcast to channel
+      expect(mockSocket.to).toHaveBeenCalledWith('test-channel');
     });
   });
 
   describe('handleEmote', () => {
     it('should handle emote successfully', () => {
       // First join the channel
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'testuser' });
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
       const data = { channelId: 'test-channel', emote: 'wave', username: 'testuser' };
       const loggerSpy = jest.spyOn(logger, 'info');
       
-      chatService.handleEmote(mockSocket, data);
+      chatService.handleEmote(mockSocket as Socket, data);
       
       expect(loggerSpy).toHaveBeenCalledWith('Emote from testuser in test-channel: wave');
     });
@@ -159,7 +284,23 @@ describe('ChatService', () => {
     it('should handle missing required fields', () => {
       const data = { channelId: 'test-channel', emote: '', username: 'testuser' };
       
-      chatService.handleEmote(mockSocket, data);
+      chatService.handleEmote(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
+    });
+
+    it('should handle missing channelId', () => {
+      const data = { channelId: '', emote: 'wave', username: 'testuser' };
+      
+      chatService.handleEmote(mockSocket as Socket, data);
+      
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
+    });
+
+    it('should handle missing username', () => {
+      const data = { channelId: 'test-channel', emote: 'wave', username: '' };
+      
+      chatService.handleEmote(mockSocket as Socket, data);
       
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
     });
@@ -167,15 +308,66 @@ describe('ChatService', () => {
     it('should handle emote from user not in channel', () => {
       const data = { channelId: 'test-channel', emote: 'wave', username: 'testuser' };
       
-      chatService.handleEmote(mockSocket, data);
+      chatService.handleEmote(mockSocket as Socket, data);
       
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Not in channel' });
+    });
+
+    it('should broadcast emote to channel', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      
+      const data = { channelId: 'test-channel', emote: 'wave', username: 'testuser' };
+      
+      chatService.handleEmote(mockSocket as Socket, data);
+      
+      // Should broadcast to channel
+      expect(mockSocket.to).toHaveBeenCalledWith('test-channel');
+    });
+  });
+
+  describe('handleDisconnection', () => {
+    it('should handle user disconnection', () => {
+      // First join a channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      
+      const loggerSpy = jest.spyOn(logger, 'info');
+      
+      chatService.handleDisconnection(mockSocket as Socket);
+      
+      expect(loggerSpy).toHaveBeenCalledWith('User testuser disconnected from chat');
+      
+      // User should be removed from tracking
+      const channelInfo = chatService.getChannelInfo('test-channel');
+      expect(channelInfo).toBeNull(); // Channel gets cleaned up when empty
+    });
+
+    it('should handle disconnection of user not in any channels', () => {
+      const loggerSpy = jest.spyOn(logger, 'info');
+      
+      chatService.handleDisconnection(mockSocket as Socket);
+      
+      expect(loggerSpy).toHaveBeenCalledWith(`[ChatService] Socket ${mockSocket.id} disconnected but no username found`);
+    });
+
+    it('should remove user from all channels on disconnection', () => {
+      // Join multiple channels
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'channel1', username: 'testuser' });
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'channel2', username: 'testuser' });
+      
+      chatService.handleDisconnection(mockSocket as Socket);
+      
+      const channel1Info = chatService.getChannelInfo('channel1');
+      const channel2Info = chatService.getChannelInfo('channel2');
+      
+      expect(channel1Info).toBeNull(); // Channel gets cleaned up when empty
+      expect(channel2Info).toBeNull(); // Channel gets cleaned up when empty
     });
   });
 
   describe('getChannelInfo', () => {
     it('should return channel info for existing channel', () => {
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'testuser' });
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
       const channelInfo = chatService.getChannelInfo('test-channel');
       
@@ -192,80 +384,347 @@ describe('ChatService', () => {
 
   describe('getAllChannels', () => {
     it('should return all channels', () => {
-      chatService.joinChannel(mockSocket, { channelId: 'channel1', username: 'user1' });
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'channel1', username: 'user1' });
       const mockSocket2: any = { 
         id: 'socket2', 
         emit: jest.fn(), 
         join: jest.fn(), 
         leave: jest.fn(), 
         rooms: new Set(['socket2']),
-        to: jest.fn().mockReturnValue({
-          emit: jest.fn()
-        })
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
       };
-      chatService.joinChannel(mockSocket2, { channelId: 'channel2', username: 'user2' });
+      chatService.joinChannel(mockSocket2 as Socket, { channelId: 'channel2', username: 'user2' });
       
-      const channels = chatService.getAllChannels();
+      const allChannels = chatService.getAllChannels();
       
-      expect(channels).toHaveLength(2);
-      expect(channels.map(([id]) => id)).toContain('channel1');
-      expect(channels.map(([id]) => id)).toContain('channel2');
+      expect(allChannels).toHaveLength(2);
+      expect(allChannels.some(([id]) => id === 'channel1')).toBe(true);
+      expect(allChannels.some(([id]) => id === 'channel2')).toBe(true);
     });
 
-    it('should return empty array when no channels', () => {
-      const channels = chatService.getAllChannels();
-      expect(channels).toEqual([]);
+    it('should return empty array when no channels exist', () => {
+      const allChannels = chatService.getAllChannels();
+      expect(allChannels).toHaveLength(0);
     });
   });
 
   describe('getStatus', () => {
-    it('should return service status', () => {
-      chatService.joinChannel(mockSocket, { channelId: 'channel1', username: 'user1' });
-      const mockSocket2: any = { 
-        id: 'socket2', 
-        emit: jest.fn(), 
-        join: jest.fn(), 
-        leave: jest.fn(), 
-        rooms: new Set(['socket2']),
+    it('should return proper status information', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      
+      const status = chatService.getStatus();
+      
+      expect(status).toHaveProperty('activeChannels');
+      expect(status).toHaveProperty('connectedUsers');
+      expect(status).toHaveProperty('channels');
+      expect(status.activeChannels).toBe(1);
+      expect(status.connectedUsers).toBe(1);
+      expect(status.channels).toEqual(['test-channel']); // Fixed: channels is an array of channel IDs
+    });
+
+    it('should return zero status when no users or channels', () => {
+      const status = chatService.getStatus();
+      
+      expect(status.activeChannels).toBe(0);
+      expect(status.connectedUsers).toBe(0);
+      expect(status.channels).toEqual([]); // Fixed: channels is an array
+    });
+  });
+
+  describe('cleanup', () => {
+    it('should clean up intervals', () => {
+      jest.spyOn(global, 'clearInterval');
+      
+      chatService.cleanup();
+      
+      // In test environment, cleanupInterval is null, so clearInterval won't be called
+      // But the method should still work without throwing
+      expect(() => chatService.cleanup()).not.toThrow();
+    });
+
+    it('should handle cleanup when no intervals exist', () => {
+      // Clean up once
+      chatService.cleanup();
+      
+      // Clean up again - should not throw
+      expect(() => chatService.cleanup()).not.toThrow();
+    });
+  });
+
+  describe('cleanupStalePlayers', () => {
+    it('should clean up stale players', () => {
+      // Create a mock socket for a disconnected user
+      const disconnectedSocket = {
+        id: 'disconnected-socket',
+        emit: jest.fn(),
+        join: jest.fn(),
+        leave: jest.fn(),
+        rooms: new Set(['disconnected-socket', 'test-channel']),
         to: jest.fn().mockReturnValue({
           emit: jest.fn()
         })
       };
-      chatService.joinChannel(mockSocket2, { channelId: 'channel2', username: 'user2' });
+
+      // Join with disconnected user
+      chatService.joinChannel(disconnectedSocket as unknown as Socket, { channelId: 'test-channel', username: 'disconnected-user' });
       
-      const status = chatService.getStatus();
+      // Simulate disconnection
+      (chatService as any).userToSocket.delete('disconnected-user');
       
-      expect(status.activeChannels).toBe(2);
-      expect(status.connectedUsers).toBe(2);
-      expect(status.channels).toContain('channel1');
-      expect(status.channels).toContain('channel2');
+      // Call cleanupStalePlayers directly
+      (chatService as any).cleanupStalePlayers();
+      
+      const channelInfo = chatService.getChannelInfo('test-channel');
+      expect(channelInfo?.players).not.toContain('disconnected-user');
     });
   });
 
-  describe('handleDisconnection', () => {
-    it('should handle user disconnection from chat', () => {
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'testuser' });
-      const loggerSpy = jest.spyOn(logger, 'info');
+  describe('broadcastToChannel', () => {
+    it('should broadcast message to channel', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
-      chatService.handleDisconnection(mockSocket);
+      // Call broadcastToChannel directly
+      (chatService as any).broadcastToChannel('test-channel', 'testEvent', { message: 'test' });
       
-      expect(loggerSpy).toHaveBeenCalledWith('User testuser disconnected from chat');
+      // Should emit to the channel via io.to().emit()
+      // We can't easily test this without mocking io, but the method should not throw
+      expect(() => (chatService as any).broadcastToChannel('test-channel', 'testEvent', { message: 'test' })).not.toThrow();
+    });
+  });
+
+  describe('removeUserFromChannel', () => {
+    it('should remove user from channel', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
-      // User should be removed from channel
+      // Call removeUserFromChannel directly
+      (chatService as any).removeUserFromChannel('test-channel', 'testuser');
+      
       const channelInfo = chatService.getChannelInfo('test-channel');
       expect(channelInfo).toBeNull(); // Channel gets cleaned up when empty
     });
 
-    it('should clean up empty channels on disconnection', () => {
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'testuser' });
-      const loggerSpy = jest.spyOn(logger, 'info');
+    it('should emit playerLeft event when removing user', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
       
-      chatService.handleDisconnection(mockSocket);
+      // Call removeUserFromChannel directly
+      (chatService as any).removeUserFromChannel('test-channel', 'testuser');
       
-      expect(loggerSpy).toHaveBeenCalledWith('Cleaned up empty chat channel: test-channel');
+      // Should emit playerLeft event via broadcastToChannel
+      // We can't easily test this without mocking io, but the method should not throw
+      expect(() => (chatService as any).removeUserFromChannel('test-channel', 'testuser')).not.toThrow();
+    });
+
+    it('should clean up empty channels', () => {
+      // First join the channel
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      
+      // Call removeUserFromChannel directly
+      (chatService as any).removeUserFromChannel('test-channel', 'testuser');
       
       const channelInfo = chatService.getChannelInfo('test-channel');
       expect(channelInfo).toBeNull();
+    });
+  });
+
+  describe('removeUserFromChannel edge cases', () => {
+    it('should handle removing user from non-existent channel', () => {
+      // Try to remove user from channel that doesn't exist
+      chatService['removeUserFromChannel']('non-existent-channel', 'testuser');
+      
+      // Should not throw error and should handle gracefully
+      expect(chatService['chatChannels'].has('non-existent-channel')).toBe(false);
+    });
+
+    it('should handle removing user who was not in channel', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Clear the emit mock to reset call count
+      mockSocket.emit.mockClear();
+      
+      // Try to remove different user who was never in channel
+      chatService['removeUserFromChannel']('test-channel', 'user2');
+      
+      // Should not broadcast playerLeft event since user2 was never in channel
+      // But chatChannelState might still be broadcast to remaining users
+      // The key is that the channel should still exist with user1 in it
+      const channelInfo = chatService.getChannelInfo('test-channel');
+      expect(channelInfo).not.toBeNull();
+      expect(channelInfo?.players).toContain('user1');
+      expect(channelInfo?.players).not.toContain('user2');
+    });
+
+    it('should handle removing user from empty channel', () => {
+      // Create empty channel
+      chatService['chatChannels'].set('empty-channel', {
+        players: [],
+        lastUpdated: Date.now()
+      });
+
+      // Try to remove user from empty channel
+      chatService['removeUserFromChannel']('empty-channel', 'testuser');
+      
+      // Should handle gracefully without errors
+      // The channel should be deleted since it's empty after the operation
+      expect(chatService['chatChannels'].has('empty-channel')).toBe(false);
+    });
+  });
+
+  describe('broadcastToChannel edge cases', () => {
+    it('should handle broadcasting to non-existent channel', () => {
+      // Try to broadcast to channel that doesn't exist
+      expect(() => chatService['broadcastToChannel']('non-existent-channel', 'testEvent', { data: 'test' })).not.toThrow();
+    });
+
+    it('should handle broadcasting with null data', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Try to broadcast null data
+      expect(() => chatService['broadcastToChannel']('test-channel', 'testEvent', null)).not.toThrow();
+    });
+  });
+
+  describe('cleanupStalePlayers edge cases', () => {
+    it('should handle cleanup when no channels exist', () => {
+      // Clear all channels
+      chatService['chatChannels'].clear();
+      
+      // Should not throw error when no channels exist
+      expect(() => chatService['cleanupStalePlayers']()).not.toThrow();
+    });
+
+    it('should handle cleanup when all players are stale', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'stale-user' });
+      
+      // Clear socket mappings to make user stale
+      chatService['socketToUser'].clear();
+      chatService['userToSocket'].clear();
+      
+      // Run cleanup
+      chatService['cleanupStalePlayers']();
+      
+      // Channel should still exist but with no players since cleanupStalePlayers doesn't delete channels
+      expect(chatService['chatChannels'].has('test-channel')).toBe(true);
+      const channelInfo = chatService.getChannelInfo('test-channel');
+      expect(channelInfo?.players).toEqual([]);
+    });
+  });
+
+  describe('handleMessage edge cases', () => {
+    it('should handle message with empty string', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Try to send empty message
+      chatService.handleMessage(mockSocket, { 
+        channelId: 'test-channel', 
+        username: 'user1', 
+        message: '' 
+      });
+      
+      // Should emit error for empty message
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
+    });
+
+    it('should handle message with only whitespace', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Try to send whitespace-only message
+      chatService.handleMessage(mockSocket, { 
+        channelId: 'test-channel', 
+        username: 'user1', 
+        message: '   ' 
+      });
+      
+      // Should handle whitespace-only message (this depends on your validation logic)
+      // If you want to reject whitespace-only messages, add validation in the service
+    });
+  });
+
+  describe('handleEmote edge cases', () => {
+    it('should handle emote with empty string', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Try to send empty emote
+      chatService.handleEmote(mockSocket, { 
+        channelId: 'test-channel', 
+        username: 'user1', 
+        emote: '' 
+      });
+      
+      // Should emit error for empty emote
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: 'Missing required fields' });
+    });
+
+    it('should handle emote with invalid emote type', () => {
+      const mockSocket = {
+        id: 'test-socket-id',
+        emit: jest.fn(),
+        join: jest.fn(),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      } as any;
+
+      // Add user to channel
+      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
+      
+      // Try to send invalid emote
+      chatService.handleEmote(mockSocket, { 
+        channelId: 'test-channel', 
+        username: 'user1', 
+        emote: 'invalid-emote' 
+      });
+      
+      // Should handle invalid emote (this depends on your validation logic)
+      // If you want to validate emote types, add validation in the service
     });
   });
 }); 

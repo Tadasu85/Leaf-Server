@@ -1,3 +1,7 @@
+// Import all types to ensure they are properly exported and accessible
+import * as Types from '../src/types';
+
+// Also import individual types for specific testing
 import {
   HiveConfig,
   GameConfig,
@@ -21,10 +25,90 @@ import {
   RegisterResponse,
   Logger,
   ChatServiceInterface,
-  UserServiceInterface
+  UserServiceInterface,
+  validateHiveConfig,
+  validateGameConfig,
+  validateServerConfig,
+  createDefaultChatChannel,
+  createDefaultUserSession
 } from '../src/types';
 
 describe('Type Definitions', () => {
+  describe('Type Exports', () => {
+    it('should allow type instantiation', () => {
+      // Test that types can be used to create objects
+      const hiveConfig: Types.HiveConfig = { nodes: ['test'] };
+      const gameConfig: Types.GameConfig = { idName: 'test', account: 'test' };
+      const chatChannel: Types.ChatChannel = { players: [], lastUpdated: Date.now() };
+      
+      expect(hiveConfig).toBeDefined();
+      expect(gameConfig).toBeDefined();
+      expect(chatChannel).toBeDefined();
+    });
+
+    it('should compile without errors', () => {
+      // This test ensures that all types are properly defined and can be used
+      // If there are any type errors, the test will fail to compile
+      const testObject: Types.ServerConfig = {
+        hive: { nodes: ['test'] },
+        game: { idName: 'test', account: 'test' },
+        signalingServer: 'test',
+        admins: ['admin'],
+        builders: ['builder']
+      };
+      
+      expect(testObject).toBeDefined();
+    });
+  });
+
+  describe('Utility Functions', () => {
+    it('should validate HiveConfig correctly', () => {
+      const validConfig: HiveConfig = { nodes: ['https://api.hive.blog'] };
+      const invalidConfig: HiveConfig = { nodes: [] };
+      
+      expect(validateHiveConfig(validConfig)).toBe(true);
+      expect(validateHiveConfig(invalidConfig)).toBe(false);
+    });
+
+    it('should validate GameConfig correctly', () => {
+      const validConfig: GameConfig = { idName: 'test-game', account: 'test-account' };
+      const invalidConfig = { idName: 'test-game' }; // missing account
+      
+      expect(validateGameConfig(validConfig)).toBe(true);
+      expect(validateGameConfig(invalidConfig as GameConfig)).toBe(false);
+    });
+
+    it('should validate ServerConfig correctly', () => {
+      const validConfig: ServerConfig = {
+        hive: { nodes: ['https://api.hive.blog'] },
+        game: { idName: 'test-game', account: 'test-account' },
+        signalingServer: 'wss://signaling.example.com',
+        admins: ['admin'],
+        builders: ['builder']
+      };
+      
+      expect(validateServerConfig(validConfig)).toBe(true);
+    });
+
+    it('should create default chat channel', () => {
+      const channel = createDefaultChatChannel('test-channel');
+      
+      expect(channel.players).toEqual([]);
+      expect(typeof channel.lastUpdated).toBe('number');
+      expect(channel.lastUpdated).toBeGreaterThan(0);
+    });
+
+    it('should create default user session', () => {
+      const session = createDefaultUserSession('testuser', 'socket-123');
+      
+      expect(session.username).toBe('testuser');
+      expect(session.socketId).toBe('socket-123');
+      expect(session.isOnline).toBe(true);
+      expect(typeof session.connectedAt).toBe('number');
+      expect(typeof session.lastSeen).toBe('number');
+    });
+  });
+
   describe('Configuration Types', () => {
     it('should define HiveConfig correctly', () => {
       const hiveConfig: HiveConfig = {

@@ -137,4 +137,9 @@ export interface UserServiceInterface {
     getStatus(): UserServiceStatus;
     cleanupOldSessions(maxAge?: number): void;
 }
+export declare function validateHiveConfig(config: HiveConfig): boolean;
+export declare function validateGameConfig(config: GameConfig): boolean;
+export declare function validateServerConfig(config: ServerConfig): boolean;
+export declare function createDefaultChatChannel(channelId: string): ChatChannel;
+export declare function createDefaultUserSession(username: string, socketId: string): UserSession;
 //# sourceMappingURL=index.d.ts.map

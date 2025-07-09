@@ -159,4 +159,38 @@ export interface UserServiceInterface {
   getConnectedUsersCount(): number;
   getStatus(): UserServiceStatus;
   cleanupOldSessions(maxAge?: number): void;
+}
+
+// Utility functions for type validation
+export function validateHiveConfig(config: HiveConfig): boolean {
+  return Array.isArray(config.nodes) && config.nodes.length > 0;
+}
+
+export function validateGameConfig(config: GameConfig): boolean {
+  return typeof config.idName === 'string' && typeof config.account === 'string';
+}
+
+export function validateServerConfig(config: ServerConfig): boolean {
+  return validateHiveConfig(config.hive) && 
+         validateGameConfig(config.game) && 
+         typeof config.signalingServer === 'string';
+}
+
+export function createDefaultChatChannel(channelId: string): ChatChannel {
+  return {
+    players: [],
+    lastUpdated: Date.now(),
+    // Include channelId to avoid unused parameter warning
+    ...(channelId ? { channelId } : {})
+  } as ChatChannel;
+}
+
+export function createDefaultUserSession(username: string, socketId: string): UserSession {
+  return {
+    username,
+    connectedAt: Date.now(),
+    lastSeen: Date.now(),
+    isOnline: true,
+    socketId
+  };
 } 
