@@ -146,7 +146,7 @@ deploy-production:
 
 # Performance testing (optional)
 performance-test:
-  stage: test
+  stage: build
   image: node:${NODE_VERSION}-alpine
   before_script:
     - cd leaf_server
