@@ -9,7 +9,7 @@ module.exports = {
     '!**/vendor/**'
   ],
   coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov'],
+  coverageReporters: ['text', 'lcov', 'cobertura', 'json'],
   coverageThreshold: {
     global: {
       statements: 70,

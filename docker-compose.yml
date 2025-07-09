@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  leaf-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - leaf-network
+
+  # Development service with hot reload
+  leaf-server-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    command: npm run dev
+    profiles:
+      - dev
+    networks:
+      - leaf-network
+
+  # Test service
+  leaf-server-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    environment:
+      - NODE_ENV=test
+    command: npm test
+    profiles:
+      - test
+    networks:
+      - leaf-network
+
+networks:
+  leaf-network:
+    driver: bridge 
