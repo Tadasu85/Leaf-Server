@@ -26,7 +26,6 @@ lint:
   stage: lint
   image: node:${NODE_VERSION}-alpine
   before_script:
-    - cd leaf_server
     - npm ci --cache .npm --prefer-offline
   script:
     - echo "Checking TypeScript compilation..."
@@ -46,7 +45,6 @@ test:
   stage: test
   image: node:${NODE_VERSION}-alpine
   before_script:
-    - cd leaf_server
     - npm ci --cache .npm --prefer-offline
   script:
     - echo "Running tests with coverage..."
@@ -72,7 +70,6 @@ build:
   stage: build
   image: node:${NODE_VERSION}-alpine
   before_script:
-    - cd leaf_server
     - npm ci --cache .npm --prefer-offline
   script:
     - echo "Building TypeScript project..."
@@ -95,7 +92,6 @@ security-audit:
   stage: test
   image: node:${NODE_VERSION}-alpine
   before_script:
-    - cd leaf_server
     - npm ci --cache .npm --prefer-offline
   script:
     - echo "Running security audit..."
@@ -149,7 +145,6 @@ performance-test:
   stage: build
   image: node:${NODE_VERSION}-alpine
   before_script:
-    - cd leaf_server
     - npm ci --cache .npm --prefer-offline
     - npm run build
   script:
