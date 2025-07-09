@@ -168,9 +168,8 @@ notify:
   stage: .post
   image: alpine:latest
   script:
-    - echo "Pipeline completed with status: $CI_PIPELINE_STATUS"
+    - echo "Pipeline completed successfully"
     - echo "This could send notifications to Slack, Discord, or email"
   rules:
-    - if: $CI_PIPELINE_STATUS == "success"
-    - if: $CI_PIPELINE_STATUS == "failed"
+    - when: always
   allow_failure: true 
