@@ -59,19 +59,46 @@ describe('Logger', () => {
 
   describe('debug', () => {
     it('should not log debug messages by default', () => {
-      logger.debug('Test debug message');
+      const logger = new Logger();
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      
+      logger.debug('Debug message');
       
       expect(consoleSpy).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
     });
 
     it('should log debug messages when log level is debug', () => {
-      const debugLogger = new Logger('debug');
-      debugLogger.debug('Test debug message');
+      const logger = new Logger('debug');
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      
+      logger.debug('Debug message');
       
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringMatching(/\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] \[DEBUG\]/),
-        'Test debug message'
+        'Debug message'
       );
+      consoleSpy.mockRestore();
+    });
+
+    it('should not log debug messages when log level is warn', () => {
+      const logger = new Logger('warn');
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      
+      logger.debug('Debug message');
+      
+      expect(consoleSpy).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    it('should not log debug messages when log level is error', () => {
+      const logger = new Logger('error');
+      const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+      
+      logger.debug('Debug message');
+      
+      expect(consoleSpy).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
     });
   });
 }); 

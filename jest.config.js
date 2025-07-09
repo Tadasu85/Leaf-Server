@@ -9,7 +9,7 @@ module.exports = {
     '!**/vendor/**'
   ],
   coverageDirectory: 'coverage',
-  coverageReporters: ['text', 'lcov'],
+  coverageReporters: ['text', 'lcov', 'cobertura', 'json'],
   coverageThreshold: {
     global: {
       statements: 70,
@@ -24,5 +24,6 @@ module.exports = {
   detectOpenHandles: true, // Detect open handles that prevent Jest from exiting
   maxWorkers: 1, // Run tests serially to prevent port conflicts and rate limiting issues
   collectCoverage: true,
-  coverageProvider: 'v8'
+  coverageProvider: 'v8',
+  setupFilesAfterEnv: ['<rootDir>/src/setupTests.ts']
 }; 
