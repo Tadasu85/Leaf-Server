@@ -40,16 +40,8 @@ The CI/CD pipeline is configured to automatically build, test, and deploy the Le
 ### `.gitlab-ci.yml`
 Main CI/CD configuration file with pipeline stages and jobs.
 
-### `Dockerfile`
-Multi-stage Dockerfile for building and running the application:
-- **Builder stage**: Installs dependencies and builds TypeScript
-- **Production stage**: Creates optimized production image
-
-### `docker-compose.yml`
-Local development and testing setup with multiple services:
-- `leaf-server`: Production service
-- `leaf-server-dev`: Development service with hot reload
-- `leaf-server-test`: Test service
+### `scripts/deploy.sh`
+Deployment script that can be customized for different environments.
 
 ### `scripts/deploy.sh`
 Deployment script that can be customized for different environments.
@@ -60,17 +52,17 @@ Deployment script that can be customized for different environments.
 
 1. **Start development server:**
    ```bash
-   docker-compose --profile dev up
+   npm run dev
    ```
 
 2. **Run tests:**
    ```bash
-   docker-compose --profile test up
+   npm test
    ```
 
 3. **Start production server:**
    ```bash
-   docker-compose up
+   npm run build && npm start
    ```
 
 ### GitLab CI/CD
@@ -98,8 +90,6 @@ Configure these in GitLab Settings > CI/CD > Variables:
 
 ### Required Variables
 - `DEPLOY_ENV`: Deployment environment (staging/production)
-- `DOCKER_IMAGE`: Docker image name
-- `DOCKER_TAG`: Docker image tag
 
 ### Optional Variables
 - `NODE_ENV`: Node.js environment (test/development/production)
@@ -123,10 +113,7 @@ Coverage reports are available in the GitLab CI/CD interface under:
 - Does not fail the pipeline (allow_failure: true)
 - Review security warnings in the pipeline logs
 
-### Docker Security
-- Uses non-root user (nodejs:1001)
-- Multi-stage build reduces attack surface
-- Health checks ensure application availability
+
 
 ## Troubleshooting
 
@@ -157,9 +144,8 @@ Coverage reports are available in the GitLab CI/CD interface under:
    # Build locally
    npm run build
    
-   # Run with Docker
-   docker build -t leaf-server .
-   docker run -p 3000:3000 leaf-server
+   # Run locally
+   npm run build && npm start
    ```
 
 2. **Pipeline Debugging:**
