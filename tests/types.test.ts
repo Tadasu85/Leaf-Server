@@ -393,6 +393,7 @@ describe('Type Definitions', () => {
         leaveChannel: jest.fn(),
         handleMessage: jest.fn(),
         handleEmote: jest.fn(),
+        handleKeepaliveResponse: jest.fn(),
         getChannelInfo: jest.fn(),
         getAllChannels: jest.fn(),
         getStatus: jest.fn()

@@ -8,9 +8,17 @@ declare class ChatService implements ChatServiceInterface {
     private socketToUser;
     private userToSocket;
     private cleanupInterval;
+    private keepaliveRequests;
+    private keepaliveTimeout;
+    private keepaliveCheckInterval;
     constructor(io: SocketIOServer, logger: Logger);
     handleConnection(_socket: Socket): void;
     handleDisconnection(socket: Socket): void;
+    private sendKeepaliveRequest;
+    handleKeepaliveResponse(socket: Socket): void;
+    private handleKeepaliveTimeout;
+    private clearKeepaliveRequest;
+    private getChannelsForUser;
     joinChannel(socket: Socket, data: JoinChatChannelData & {
         username: string;
     }): void;

@@ -114,6 +114,10 @@ export interface EmoteData {
   emote: string;
 }
 
+export interface KeepaliveData {
+  timestamp: number;
+}
+
 export interface RegisterData {
   username: string;
 }
@@ -138,6 +142,7 @@ export interface ChatServiceInterface {
   leaveChannel(socket: Socket, data: LeaveChatChannelData): void;
   handleMessage(socket: Socket, data: ChatMessageData & { username: string }): void;
   handleEmote(socket: Socket, data: EmoteData & { username: string }): void;
+  handleKeepaliveResponse(socket: Socket): void;
   getChannelInfo(channelId: string): ChatChannel | null;
   getAllChannels(): [string, ChatChannel][];
   getStatus(): ChatServiceStatus;

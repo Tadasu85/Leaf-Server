@@ -3,6 +3,7 @@ declare class Logger implements LoggerInterface {
     private logLevel;
     constructor(logLevel?: 'debug' | 'info' | 'warn' | 'error');
     private _log;
+    private shouldLog;
     info(message: string, ...args: any[]): void;
     warn(message: string, ...args: any[]): void;
     error(message: string, ...args: any[]): void;

@@ -13,7 +13,8 @@ import {
   JoinChatChannelData,
   LeaveChatChannelData,
   ChatMessageData,
-  EmoteData
+  EmoteData,
+  KeepaliveData
 } from '../types';
 
 class ChatService implements ChatServiceInterface {
@@ -23,6 +24,11 @@ class ChatService implements ChatServiceInterface {
   private socketToUser: Map<string, string>; // Socket ID -> Username
   private userToSocket: Map<string, string>; // Username -> Socket ID
   private cleanupInterval: NodeJS.Timeout | null = null;
+  
+  // Keepalive tracking
+  private keepaliveRequests: Map<string, { timestamp: number; timeoutId: NodeJS.Timeout }> = new Map(); // Username -> keepalive data
+  private keepaliveTimeout: number = 10000; // 10 seconds to respond to keepalive
+  private keepaliveCheckInterval: number = 300000; // 5 minutes between cleanup checks
 
   constructor(io: SocketIOServer, logger: Logger) {
     this.io = io;
@@ -33,9 +39,13 @@ class ChatService implements ChatServiceInterface {
     
     // Set up periodic cleanup of stale players (only in non-test environments)
     if (process.env['NODE_ENV'] !== 'test') {
+      this.logger.info(`[ChatService] Setting up cleanup interval every ${this.keepaliveCheckInterval}ms`);
       this.cleanupInterval = setInterval(() => {
+        this.logger.info(`[ChatService] Running periodic cleanup check`);
         this.cleanupStalePlayers();
-      }, 30000); // Clean up every 30 seconds
+      }, this.keepaliveCheckInterval);
+    } else {
+      this.logger.info(`[ChatService] Skipping cleanup interval setup in test environment`);
     }
   }
 
@@ -53,6 +63,9 @@ class ChatService implements ChatServiceInterface {
       this.socketToUser.delete(socket.id);
       this.userToSocket.delete(username);
       
+      // Clear any pending keepalive requests for this user
+      this.clearKeepaliveRequest(username);
+      
       // Remove user from all chat channels
       const userChannels = Array.from(socket.rooms).filter(r => r !== socket.id);
       userChannels.forEach(channelId => {
@@ -62,6 +75,92 @@ class ChatService implements ChatServiceInterface {
     } else {
       this.logger.info(`[ChatService] Socket ${socket.id} disconnected but no username found`);
     }
+  }
+
+  // Send keepalive request to a user
+  private sendKeepaliveRequest(username: string): void {
+    const socketId = this.userToSocket.get(username);
+    if (!socketId) {
+      this.logger.warn(`[ChatService] Cannot send keepalive to ${username} - no socket found`);
+      return;
+    }
+
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      this.logger.warn(`[ChatService] Cannot send keepalive to ${username} - socket not found`);
+      return;
+    }
+
+    // Clear any existing keepalive request
+    this.clearKeepaliveRequest(username);
+
+    // Send keepalive request
+    const keepaliveData: KeepaliveData = { timestamp: Date.now() };
+    socket.emit('keepalive', keepaliveData);
+    this.logger.info(`[ChatService] Sent keepalive request to ${username}`);
+
+    // Set up timeout to handle no response
+    const timeoutId = setTimeout(() => {
+      this.handleKeepaliveTimeout(username);
+    }, this.keepaliveTimeout);
+
+    // Track the keepalive request
+    this.keepaliveRequests.set(username, {
+      timestamp: Date.now(),
+      timeoutId
+    });
+  }
+
+  // Handle keepalive response from client
+  handleKeepaliveResponse(socket: Socket): void {
+    const username = this.socketToUser.get(socket.id);
+    if (!username) {
+      this.logger.warn(`[ChatService] Keepalive response from unknown socket ${socket.id}`);
+      return;
+    }
+
+    this.clearKeepaliveRequest(username);
+    this.logger.info(`[ChatService] Received keepalive response from ${username}`);
+  }
+
+  // Handle keepalive timeout (no response received)
+  private handleKeepaliveTimeout(username: string): void {
+    this.logger.info(`[ChatService] Keepalive timeout for ${username} - removing from all channels`);
+    
+    // Remove user from all channels they're in
+    const userChannels = this.getChannelsForUser(username);
+    userChannels.forEach(channelId => {
+      this.removeUserFromChannel(channelId, username);
+    });
+
+    // Clean up user tracking
+    const socketId = this.userToSocket.get(username);
+    if (socketId) {
+      this.socketToUser.delete(socketId);
+      this.userToSocket.delete(username);
+    }
+
+    this.clearKeepaliveRequest(username);
+  }
+
+  // Clear keepalive request for a user
+  private clearKeepaliveRequest(username: string): void {
+    const keepaliveData = this.keepaliveRequests.get(username);
+    if (keepaliveData) {
+      clearTimeout(keepaliveData.timeoutId);
+      this.keepaliveRequests.delete(username);
+    }
+  }
+
+  // Get all channels a user is in
+  private getChannelsForUser(username: string): string[] {
+    const channels: string[] = [];
+    for (const [channelId, channel] of this.chatChannels.entries()) {
+      if (channel.players.includes(username)) {
+        channels.push(channelId);
+      }
+    }
+    return channels;
   }
 
   // Join a chat channel
@@ -272,43 +371,38 @@ class ChatService implements ChatServiceInterface {
     return Array.from(this.chatChannels.entries());
   }
 
-  // Clean up stale players from all channels
+  // Clean up stale players from all channels using keepalive system
   private cleanupStalePlayers(): void {
     const connectedPlayers = Array.from(this.userToSocket.keys());
-    let totalCleaned = 0;
+    let keepaliveSent = 0;
     
-    for (const [channelId, channel] of this.chatChannels.entries()) {
-      const oldPlayers = [...channel.players];
-      channel.players = channel.players.filter(player => connectedPlayers.includes(player));
+    this.logger.info(`[ChatService] Cleanup check - Connected players: ${JSON.stringify(connectedPlayers)}`);
+    this.logger.info(`[ChatService] Cleanup check - Active channels: ${this.chatChannels.size}`);
+    
+    for (const [_channelId, channel] of this.chatChannels.entries()) {
+      // Find players who are in the channel but not in the connected players list
+      const stalePlayers = channel.players.filter(player => !connectedPlayers.includes(player));
       
-      const removedPlayers = oldPlayers.filter(player => !connectedPlayers.includes(player));
-      if (removedPlayers.length > 0) {
-        totalCleaned += removedPlayers.length;
-        this.logger.info(`[ChatService] Periodic cleanup removed from ${channelId}: ${JSON.stringify(removedPlayers)}`);
-        
-        // Broadcast individual playerLeft events for each removed player
-        removedPlayers.forEach(removedPlayer => {
-          const playerLeftEvent: PlayerLeftEvent = {
-            username: removedPlayer,
-            players: channel.players,
-            channelId
-          };
-          this.logger.info(`[ChatService] Broadcasting playerLeft for periodic cleanup: ${JSON.stringify(playerLeftEvent)}`);
-          this.broadcastToChannel(channelId, 'playerLeft', playerLeftEvent);
-        });
-        
-        // Also broadcast updated player list to remaining players
-        const chatChannelState: ChatChannelState = {
-          channelId,
-          players: channel.players,
-          lastUpdated: channel.lastUpdated
-        };
-        this.broadcastToChannel(channelId, 'chatChannelState', chatChannelState);
+      if (stalePlayers.length > 0) {
+        this.logger.info(`[ChatService] Found stale players in channel: ${JSON.stringify(stalePlayers)}`);
       }
+      
+      // Send keepalive requests to stale players
+      stalePlayers.forEach(player => {
+        // Only send keepalive if we don't already have a pending request
+        if (!this.keepaliveRequests.has(player)) {
+          this.sendKeepaliveRequest(player);
+          keepaliveSent++;
+        } else {
+          this.logger.info(`[ChatService] Keepalive already pending for ${player}`);
+        }
+      });
     }
     
-    if (totalCleaned > 0) {
-      this.logger.info(`[ChatService] Periodic cleanup completed, removed ${totalCleaned} stale players total`);
+    if (keepaliveSent > 0) {
+      this.logger.info(`[ChatService] Sent keepalive requests to ${keepaliveSent} potentially stale players`);
+    } else {
+      this.logger.info(`[ChatService] No keepalive requests sent - all players appear to be connected`);
     }
   }
 
@@ -327,6 +421,13 @@ class ChatService implements ChatServiceInterface {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+    
+    // Clear all pending keepalive requests
+    for (const [_username, keepaliveData] of this.keepaliveRequests.entries()) {
+      clearTimeout(keepaliveData.timeoutId);
+    }
+    this.keepaliveRequests.clear();
+    
     this.chatChannels.clear();
     this.socketToUser.clear();
     this.userToSocket.clear();
