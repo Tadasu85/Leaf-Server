@@ -8,8 +8,6 @@ set -e  # Exit on any error
 # Configuration
 APP_NAME="leaf-server"
 DEPLOY_ENV="${DEPLOY_ENV:-staging}"
-DOCKER_IMAGE="${DOCKER_IMAGE:-leaf-server}"
-DOCKER_TAG="${DOCKER_TAG:-latest}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -42,46 +40,17 @@ check_env_vars() {
     log_info "Deploying to environment: $DEPLOY_ENV"
 }
 
-# Build Docker image
-build_docker_image() {
-    log_info "Building Docker image..."
+# Build application
+build_application() {
+    log_info "Building application..."
     
-    if [ -f "Dockerfile" ]; then
-        docker build -t "$DOCKER_IMAGE:$DOCKER_TAG" .
-        log_info "Docker image built successfully: $DOCKER_IMAGE:$DOCKER_TAG"
+    if [ -f "package.json" ]; then
+        npm install
+        npm run build
+        log_info "Application built successfully"
     else
-        log_error "Dockerfile not found"
+        log_error "package.json not found"
         exit 1
-    fi
-}
-
-# Deploy to Kubernetes (example)
-deploy_to_kubernetes() {
-    log_info "Deploying to Kubernetes..."
-    
-    # This is a placeholder - customize for your Kubernetes setup
-    if command -v kubectl &> /dev/null; then
-        # Update deployment
-        kubectl set image deployment/$APP_NAME $APP_NAME=$DOCKER_IMAGE:$DOCKER_TAG -n $DEPLOY_ENV
-        
-        # Wait for rollout
-        kubectl rollout status deployment/$APP_NAME -n $DEPLOY_ENV
-        
-        log_info "Kubernetes deployment completed"
-    else
-        log_warn "kubectl not found, skipping Kubernetes deployment"
-    fi
-}
-
-# Deploy to Docker Swarm (example)
-deploy_to_swarm() {
-    log_info "Deploying to Docker Swarm..."
-    
-    if command -v docker &> /dev/null; then
-        # This is a placeholder - customize for your Docker Swarm setup
-        log_info "Docker Swarm deployment completed"
-    else
-        log_warn "Docker not found, skipping Docker Swarm deployment"
     fi
 }
 
@@ -111,15 +80,9 @@ main() {
     log_info "Starting deployment process..."
     
     check_env_vars
-    build_docker_image
+    build_application
     
     case "$DEPLOY_ENV" in
-        "kubernetes")
-            deploy_to_kubernetes
-            ;;
-        "swarm")
-            deploy_to_swarm
-            ;;
         "server")
             deploy_to_server
             ;;

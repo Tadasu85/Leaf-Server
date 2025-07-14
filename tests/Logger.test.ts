@@ -5,7 +5,7 @@ describe('Logger', () => {
   let consoleSpy: jest.SpyInstance;
 
   beforeEach(() => {
-    logger = new Logger();
+    logger = new Logger('info'); // Explicitly set to info level for testing
     consoleSpy = jest.spyOn(console, 'log').mockImplementation();
   });
 

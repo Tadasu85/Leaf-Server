@@ -98,8 +98,7 @@ create_commit() {
         git commit -m "Initial commit: Add CI/CD configuration
 
 - Add GitLab CI/CD pipeline configuration
-- Add Dockerfile for containerization
-- Add docker-compose for local development
+
 - Add deployment scripts
 - Add comprehensive documentation
 - Update Jest configuration for coverage reports"
@@ -133,8 +132,6 @@ show_next_steps() {
     echo "2. Check the CI/CD pipeline in the GitLab interface"
     echo "3. Configure environment variables in GitLab Settings > CI/CD > Variables:"
     echo "   - DEPLOY_ENV (staging/production)"
-    echo "   - DOCKER_IMAGE (leaf-server)"
-    echo "   - DOCKER_TAG (latest)"
     echo
     echo "4. Set up branch protection rules:"
     echo "   - Require pipeline success before merge"
