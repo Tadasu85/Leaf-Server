@@ -234,6 +234,10 @@ io.on('connection', (socket) => {
         }
         chatService.handleEmote(socket, { channelId: data.channelId, emote: data.emote, username });
     });
+    // Handle keepalive response
+    socket.on('keepaliveResponse', () => {
+        chatService.handleKeepaliveResponse(socket);
+    });
     // Handle disconnection
     socket.on('disconnect', () => {
         // Clean up rate limiting data (skip in test environment)
