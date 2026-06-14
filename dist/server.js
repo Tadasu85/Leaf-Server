@@ -16,12 +16,12 @@ const Logger_1 = __importDefault(require("./utils/Logger"));
 // Initialize logger
 const logger = new Logger_1.default();
 // Rate limiting configuration
-const createRateLimiter = (windowMs, max, message) => {
+const createRateLimiter = (windowMs, limit, message) => {
     return (0, express_rate_limit_1.default)({
         windowMs,
-        max,
+        limit,
         message: { error: message },
-        standardHeaders: true,
+        standardHeaders: 'draft-7',
         legacyHeaders: false,
         handler: (req, res) => {
             logger.warn(`Rate limit exceeded for IP: ${req.ip}`);
@@ -47,7 +47,7 @@ if (process.env['NODE_ENV'] !== 'test') {
 }
 app.use((0, cors_1.default)({
     origin: process.env['NODE_ENV'] === 'production'
-        ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
+        ? [process.env['REACT_APP_PRODUCTION_URL'] || 'https://leaf-5lrq.onrender.com']
         : '*',
     methods: ['GET', 'POST'],
     credentials: true
@@ -62,8 +62,6 @@ const io = new socket_io_1.Server(server, {
     cors: {
         origin: process.env['NODE_ENV'] === 'production'
             ? [
-                'https://leaf-game.herokuapp.com',
-                'https://leaf-game.netlify.app',
                 'https://leaf-5lrq.onrender.com',
                 process.env['REACT_APP_PRODUCTION_URL'] || 'https://leaf-5lrq.onrender.com'
             ]
