@@ -21,12 +21,12 @@ import {
 const logger = new Logger();
 
 // Rate limiting configuration
-const createRateLimiter = (windowMs: number, max: number, message: string) => {
+const createRateLimiter = (windowMs: number, limit: number, message: string) => {
   return rateLimit({
     windowMs,
-    max,
+    limit,
     message: { error: message },
-    standardHeaders: true,
+    standardHeaders: 'draft-7',
     legacyHeaders: false,
     handler: (req: Request, res: Response) => {
       logger.warn(`Rate limit exceeded for IP: ${req.ip}`);
