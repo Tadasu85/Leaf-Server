@@ -9,6 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
@@ -32,6 +33,7 @@
     "node_modules",
     "dist",
     "tests",
+    "src/setupTests.ts",
     "**/*.test.js",
     "**/*.test.ts"
   ]
