@@ -52,6 +52,10 @@ const socketLimiter = createRateLimiter(
 // Create Express app
 const app = express();
 
+// Render (and most cloud platforms) sit behind a reverse proxy that sets X-Forwarded-For.
+// Without this, express-rate-limit throws a ValidationError on every request.
+app.set('trust proxy', 1);
+
 // Apply rate limiting to all routes (skip in test environment)
 if (process.env['NODE_ENV'] !== 'test') {
   app.use(apiLimiter);
