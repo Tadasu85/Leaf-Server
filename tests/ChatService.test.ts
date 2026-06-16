@@ -343,7 +343,7 @@ describe('ChatService', () => {
     });
 
     it('should handle disconnection of user not in any channels', () => {
-      const loggerSpy = jest.spyOn(logger, 'info');
+      const loggerSpy = jest.spyOn(logger, 'debug');
       
       chatService.handleDisconnection(mockSocket as Socket);
       
