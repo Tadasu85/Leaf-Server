@@ -30,10 +30,6 @@ lint:
     - echo "Checking TypeScript compilation..."
     - npx tsc --noEmit
     - echo "Linting complete - TypeScript compilation successful"
-  artifacts:
-    reports:
-      junit: coverage/junit.xml
-    expire_in: 1 week
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -55,7 +51,6 @@ test:
       coverage_report:
         coverage_format: cobertura
         path: coverage/cobertura-coverage.xml
-      junit: coverage/junit.xml
     paths:
       - coverage/
     expire_in: 1 week
