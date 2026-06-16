@@ -1,60 +1,50 @@
+import express, { Request, Response } from 'express';
 import request from 'supertest';
-import { app, cleanup } from '../src/server';
+import rateLimit from 'express-rate-limit';
 
-describe('Rate Limiting Tests', () => {
-  afterAll(() => {
-    // Clean up any intervals created by services
-    cleanup();
+// Mirror of createRateLimiter in server.ts — tests our custom handler behaviour
+const createRateLimiter = (windowMs: number, limit: number, message: string) =>
+  rateLimit({
+    windowMs,
+    limit,
+    message: { error: message },
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (_req: Request, res: Response) => {
+      res.status(429).json({ error: message });
+    }
   });
 
-  describe('HTTP Rate Limiting', () => {
-    it('should allow requests within rate limit', async () => {
-      // Make 5 requests (well within the 100 per 15 minutes limit)
-      for (let i = 0; i < 5; i++) {
-        const response = await request(app).get('/health');
-        expect(response.status).toBe(200);
-      }
-    });
+function buildApp(limit: number) {
+  const app = express();
+  app.set('trust proxy', false);
+  app.use(createRateLimiter(60_000, limit, 'Too many requests from this IP'));
+  app.get('/test', (_req, res) => res.json({ ok: true }));
+  return app;
+}
 
-    it('should block requests when rate limit is exceeded', async () => {
-      // In test environment, rate limiting is disabled to avoid test interference
-      // This test verifies that the server responds correctly when rate limiting is disabled
-      const response = await request(app).get('/health');
-      expect(response.status).toBe(200);
-      
-      // In test environment, rate limit headers are not present since rate limiting is disabled
-      // This is the expected behavior for the test environment
-      expect(response.headers).not.toHaveProperty('ratelimit-limit');
-      expect(response.headers).not.toHaveProperty('ratelimit-remaining');
-      expect(response.headers).not.toHaveProperty('ratelimit-reset');
-    });
+describe('Rate Limiter', () => {
+  it('allows requests within the limit', async () => {
+    const app = buildApp(5);
+    for (let i = 0; i < 5; i++) {
+      await request(app).get('/test').expect(200);
+    }
   });
 
-  describe('Socket.IO Rate Limiting', () => {
-    it('should have rate limiting configuration', () => {
-      // Test that our rate limiting configuration is properly set up
-      // The app should be defined and have middleware applied
-      expect(app).toBeDefined();
-      
-      // The rate limiting middleware should be applied
-      // We can't easily test the actual socket rate limiting without
-      // setting up a full Socket.IO client, but we can verify the
-      // configuration is in place
-    });
+  it('returns 429 with error body when limit is exceeded', async () => {
+    const app = buildApp(2);
+    await request(app).get('/test').expect(200);
+    await request(app).get('/test').expect(200);
+    const res = await request(app).get('/test');
+    expect(res.status).toBe(429);
+    expect(res.body).toEqual({ error: 'Too many requests from this IP' });
   });
 
-  describe('Rate Limiter Configuration', () => {
-    it('should have proper rate limit settings', () => {
-      // Test that our rate limiting configuration is reasonable
-      const apiLimit = 100; // requests per 15 minutes
-      const socketLimit = 10; // connections per minute
-      
-      expect(apiLimit).toBe(100);
-      expect(socketLimit).toBe(10);
-      
-      // These limits should be reasonable for a game server
-      expect(apiLimit).toBeGreaterThan(0);
-      expect(socketLimit).toBeGreaterThan(0);
-    });
+  it('includes standard rate-limit headers', async () => {
+    const app = buildApp(5);
+    const res = await request(app).get('/test').expect(200);
+    // draft-7 combines into a single structured header
+    expect(res.headers['ratelimit']).toMatch(/limit=\d+/);
+    expect(res.headers['ratelimit']).toMatch(/remaining=\d+/);
   });
-}); 
+});

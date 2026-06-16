@@ -151,12 +151,18 @@ describe('Socket.IO Tests', () => {
       }, 100);
     });
 
+    it('should handle keepaliveResponse event', (done) => {
+      testSocket.emit('keepaliveResponse');
+      // No error thrown = success; give the server a tick to process it
+      setTimeout(done, 50);
+    });
+
     it('should handle disconnect event', (done) => {
       testSocket.on('disconnect', () => {
         expect(testSocket.connected).toBe(false);
         done();
       });
-      
+
       testSocket.disconnect();
     });
   });
