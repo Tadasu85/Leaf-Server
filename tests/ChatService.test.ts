@@ -434,20 +434,109 @@ describe('ChatService', () => {
   describe('cleanup', () => {
     it('should clean up intervals', () => {
       jest.spyOn(global, 'clearInterval');
-      
+
       chatService.cleanup();
-      
+
       // In test environment, cleanupInterval is null, so clearInterval won't be called
       // But the method should still work without throwing
       expect(() => chatService.cleanup()).not.toThrow();
     });
 
     it('should handle cleanup when no intervals exist', () => {
-      // Clean up once
       chatService.cleanup();
-      
-      // Clean up again - should not throw
       expect(() => chatService.cleanup()).not.toThrow();
+    });
+
+    it('should clear pending keepalive timeouts on cleanup', () => {
+      const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+      const mockTimeoutId = setTimeout(() => {}, 60000);
+      chatService['keepaliveRequests'].set('testuser', { timestamp: Date.now(), timeoutId: mockTimeoutId });
+
+      chatService.cleanup();
+
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(mockTimeoutId);
+      expect(chatService['keepaliveRequests'].size).toBe(0);
+      clearTimeoutSpy.mockRestore();
+    });
+  });
+
+  describe('handleKeepaliveResponse', () => {
+    it('should log and clear when called from a registered socket', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      const loggerSpy = jest.spyOn(logger, 'info');
+
+      chatService.handleKeepaliveResponse(mockSocket as Socket);
+
+      expect(loggerSpy).toHaveBeenCalledWith('[ChatService] Received keepalive response from testuser');
+    });
+
+    it('should clear a pending keepalive request on response', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      const mockTimeoutId = setTimeout(() => {}, 60000);
+      chatService['keepaliveRequests'].set('testuser', { timestamp: Date.now(), timeoutId: mockTimeoutId });
+
+      chatService.handleKeepaliveResponse(mockSocket as Socket);
+
+      expect(chatService['keepaliveRequests'].has('testuser')).toBe(false);
+    });
+  });
+
+  describe('handleKeepaliveTimeout', () => {
+    it('should remove the user from all channels', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+
+      chatService['handleKeepaliveTimeout']('testuser');
+
+      expect(chatService.getChannelInfo('test-channel')).toBeNull();
+    });
+
+    it('should clean up user tracking maps', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+
+      chatService['handleKeepaliveTimeout']('testuser');
+
+      expect(chatService['userToSocket'].has('testuser')).toBe(false);
+      expect(chatService['socketToUser'].has(mockSocket.id)).toBe(false);
+    });
+
+    it('should clear a pending keepalive request', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
+      const mockTimeoutId = setTimeout(() => {}, 60000);
+      chatService['keepaliveRequests'].set('testuser', { timestamp: Date.now(), timeoutId: mockTimeoutId });
+
+      chatService['handleKeepaliveTimeout']('testuser');
+
+      expect(chatService['keepaliveRequests'].has('testuser')).toBe(false);
+    });
+  });
+
+  describe('sendKeepaliveRequest', () => {
+    it('should warn when socket id is not in io.sockets', () => {
+      const warnSpy = jest.spyOn(logger, 'warn');
+      chatService['userToSocket'].set('testuser', 'ghost-socket-id');
+
+      chatService['sendKeepaliveRequest']('testuser');
+
+      expect(warnSpy).toHaveBeenCalledWith('[ChatService] Cannot send keepalive to testuser - socket not found');
+    });
+
+    it('should emit keepalive and track the request when socket exists', () => {
+      jest.useFakeTimers();
+      const mockIoSocket = { emit: jest.fn() };
+      jest.spyOn(io.sockets.sockets, 'get').mockReturnValue(mockIoSocket as any);
+      chatService['userToSocket'].set('testuser', 'real-socket-id');
+      chatService['socketToUser'].set('real-socket-id', 'testuser');
+
+      chatService['sendKeepaliveRequest']('testuser');
+
+      expect(mockIoSocket.emit).toHaveBeenCalledWith('keepalive', expect.objectContaining({ timestamp: expect.any(Number) }));
+      expect(chatService['keepaliveRequests'].has('testuser')).toBe(true);
+
+      // Advance past the keepalive timeout to cover the setTimeout callback (handleKeepaliveTimeout)
+      jest.advanceTimersByTime(chatService['keepaliveTimeout'] + 1);
+      expect(chatService['keepaliveRequests'].has('testuser')).toBe(false);
+
+      jest.useRealTimers();
     });
   });
 
@@ -530,6 +619,28 @@ describe('ChatService', () => {
       
       const channelInfo = chatService.getChannelInfo('test-channel');
       expect(channelInfo).toBeNull();
+    });
+  });
+
+  describe('removeUserFromChannel with remaining players', () => {
+    it('should emit playerLeft and chatChannelState when channel still has other players', () => {
+      const mockSocket2: any = {
+        id: 'socket2',
+        emit: jest.fn(),
+        join: jest.fn((id: string) => mockSocket2.rooms.add(id)),
+        leave: jest.fn(),
+        rooms: new Set(['socket2']),
+        to: jest.fn().mockReturnValue({ emit: jest.fn() })
+      };
+
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'user1' });
+      chatService.joinChannel(mockSocket2 as Socket, { channelId: 'test-channel', username: 'user2' });
+
+      chatService['removeUserFromChannel']('test-channel', 'user1');
+
+      const channelInfo = chatService.getChannelInfo('test-channel');
+      expect(channelInfo).not.toBeNull();
+      expect(channelInfo?.players).toEqual(['user2']);
     });
   });
 
