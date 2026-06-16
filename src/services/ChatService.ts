@@ -1,14 +1,14 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { Socket } from 'socket.io';
-import { 
-  ChatServiceInterface, 
-  ChatChannel, 
-  ChatMessage, 
-  EmoteMessage, 
-  PlayerJoinedEvent, 
-  PlayerLeftEvent, 
-  ChatChannelState, 
-  ChatServiceStatus, 
+import {
+  ChatServiceInterface,
+  ChatChannel,
+  ChatMessage,
+  EmoteMessage,
+  PlayerJoinedEvent,
+  PlayerLeftEvent,
+  ChatChannelState,
+  ChatServiceStatus,
   Logger,
   JoinChatChannelData,
   LeaveChatChannelData,
@@ -16,10 +16,12 @@ import {
   EmoteData,
   KeepaliveData
 } from '../types';
+import CurationService from './CurationService';
 
 class ChatService implements ChatServiceInterface {
   private io: SocketIOServer;
   private logger: Logger;
+  private curationService: CurationService | null;
   private chatChannels: Map<string, ChatChannel>; // Channel ID -> Channel Data
   private socketToUser: Map<string, string>; // Socket ID -> Username
   private userToSocket: Map<string, string>; // Username -> Socket ID
@@ -30,9 +32,10 @@ class ChatService implements ChatServiceInterface {
   private keepaliveTimeout: number = 10000; // 10 seconds to respond to keepalive
   private keepaliveCheckInterval: number = 300000; // 5 minutes between cleanup checks
 
-  constructor(io: SocketIOServer, logger: Logger) {
+  constructor(io: SocketIOServer, logger: Logger, curationService: CurationService | null = null) {
     this.io = io;
     this.logger = logger;
+    this.curationService = curationService;
     this.chatChannels = new Map();
     this.socketToUser = new Map();
     this.userToSocket = new Map();
@@ -207,6 +210,8 @@ class ChatService implements ChatServiceInterface {
     if (!wasAlreadyInChannel) {
       channel.players.push(username);
       channel.lastUpdated = Date.now();
+
+      this.curationService?.recordVisit(channelId, username);
 
       const playerJoinedEvent: PlayerJoinedEvent = { username, players: channel.players, channelId };
       socket.to(channelId).emit('playerJoined', playerJoinedEvent);
