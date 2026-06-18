@@ -6,6 +6,9 @@ import rateLimit from 'express-rate-limit';
 // import config from './config'; // Not currently used
 import ChatService from './services/ChatService';
 import UserService from './services/UserService';
+import CurationService from './services/CurationService';
+import BuilderService from './services/BuilderService';
+import config from './config';
 import Logger from './utils/Logger';
 import { 
   RegisterData, 
@@ -104,13 +107,16 @@ const io = new SocketIOServer(server, {
 });
 
 // Initialize services
-const chatService = new ChatService(io, logger);
+const postingKey = process.env['HIVE_POSTING_KEY'] || null;
+const curationService = new CurationService(logger, config.game.account, postingKey);
+const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
+const chatService = new ChatService(io, logger, curationService);
 const userService = new UserService(io, logger);
 
 // Cleanup function for tests
 const cleanup = () => {
   chatService.cleanup();
-  // Add any other cleanup needed for UserService if it has intervals
+  curationService.cleanup();
 };
 
 // Export cleanup for tests
@@ -299,6 +305,23 @@ io.on('connection', (socket) => {
     chatService.handleKeepaliveResponse(socket);
   });
 
+  // Builder path — client claims eligibility; server verifies on-chain and promotes
+  socket.on('claimBuilder', async () => {
+    const claimant = userService.getUserBySocket(socket.id);
+    if (!claimant) {
+      logger.warn('[Builder] claimBuilder received from unregistered socket');
+      return;
+    }
+    logger.info(`[Builder] ${claimant} is claiming builder eligibility`);
+    const result = await builderService.verifyAndPromote(claimant);
+    if (result.granted) {
+      socket.emit('builderGranted', { username: claimant });
+      logger.info(`[Builder] Builder title granted to ${claimant}`);
+    } else {
+      logger.info(`[Builder] Builder claim denied for ${claimant}: ${result.reason}`);
+    }
+  });
+
   // Handle disconnection
   socket.on('disconnect', () => {
     // Clean up rate limiting data (skip in test environment)
@@ -312,6 +335,16 @@ io.on('connection', (socket) => {
     userService.handleDisconnection(socket);
     chatService.handleDisconnection(socket);
     logger.info(`Socket disconnected: ${socket.id}`);
+  });
+});
+
+// Curation dry run endpoint
+app.get('/curation/dryrun', (_req: Request, res: Response) => {
+  const rooms = curationService.getDryRun();
+  res.json({
+    timestamp: new Date().toISOString(),
+    wouldVoteOn: rooms.slice(0, curationService.getTopN()),
+    fullRanking: rooms
   });
 });
 
