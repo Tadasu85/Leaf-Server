@@ -17,29 +17,32 @@ import {
   KeepaliveData
 } from '../types';
 import CurationService from './CurationService';
+import MuteService from './MuteService';
 
 class ChatService implements ChatServiceInterface {
   private io: SocketIOServer;
   private logger: Logger;
   private curationService: CurationService | null;
+  private muteService: MuteService | null;
   private chatChannels: Map<string, ChatChannel>; // Channel ID -> Channel Data
   private socketToUser: Map<string, string>; // Socket ID -> Username
   private userToSocket: Map<string, string>; // Username -> Socket ID
   private cleanupInterval: NodeJS.Timeout | null = null;
-  
+
   // Keepalive tracking
   private keepaliveRequests: Map<string, { timestamp: number; timeoutId: NodeJS.Timeout }> = new Map(); // Username -> keepalive data
   private keepaliveTimeout: number = 10000; // 10 seconds to respond to keepalive
   private keepaliveCheckInterval: number = 300000; // 5 minutes between cleanup checks
 
-  constructor(io: SocketIOServer, logger: Logger, curationService: CurationService | null = null) {
+  constructor(io: SocketIOServer, logger: Logger, curationService: CurationService | null = null, muteService: MuteService | null = null) {
     this.io = io;
     this.logger = logger;
     this.curationService = curationService;
+    this.muteService = muteService;
     this.chatChannels = new Map();
     this.socketToUser = new Map();
     this.userToSocket = new Map();
-    
+
     // Set up periodic cleanup of stale players (only in non-test environments)
     if (process.env['NODE_ENV'] !== 'test') {
       this.logger.info(`[ChatService] Setting up cleanup interval every ${this.keepaliveCheckInterval}ms`);
@@ -65,10 +68,10 @@ class ChatService implements ChatServiceInterface {
       this.logger.debug(`[ChatService] Removing user ${username} from channels: ${JSON.stringify(Array.from(socket.rooms).filter(r => r !== socket.id))}`);
       this.socketToUser.delete(socket.id);
       this.userToSocket.delete(username);
-      
+
       // Clear any pending keepalive requests for this user
       this.clearKeepaliveRequest(username);
-      
+
       // Remove user from all chat channels
       const userChannels = Array.from(socket.rooms).filter(r => r !== socket.id);
       userChannels.forEach(channelId => {
@@ -129,7 +132,7 @@ class ChatService implements ChatServiceInterface {
   // Handle keepalive timeout (no response received)
   private handleKeepaliveTimeout(username: string): void {
     this.logger.info(`[ChatService] Keepalive timeout for ${username} - removing from all channels`);
-    
+
     // Remove user from all channels they're in
     const userChannels = this.getChannelsForUser(username);
     userChannels.forEach(channelId => {
@@ -166,12 +169,106 @@ class ChatService implements ChatServiceInterface {
     return channels;
   }
 
+  // Returns a copy of `players` with any users that `forUser` has muted removed
+  private async filterPlayersForUser(forUser: string, players: string[]): Promise<string[]> {
+    if (!this.muteService) return players;
+    const muted = await this.muteService.getMutedUsers(forUser);
+    return players.filter(p => !muted.has(p));
+  }
+
+  // Sends chatChannelState to one socket with the player list filtered for their mute list
+  private async sendFilteredChannelState(socket: Socket, channelId: string, players: string[], lastUpdated: number): Promise<void> {
+    const username = this.socketToUser.get(socket.id);
+    if (!this.muteService || !username) {
+      socket.emit('chatChannelState', { channelId, players, lastUpdated } as ChatChannelState);
+      return;
+    }
+    const visiblePlayers = await this.filterPlayersForUser(username, players);
+    socket.emit('chatChannelState', { channelId, players: visiblePlayers, lastUpdated } as ChatChannelState);
+  }
+
+  // Sends playerJoined to existing channel members, skipping those who have muted the joiner
+  private async sendFilteredPlayerJoined(channelId: string, joinerUsername: string, allPlayers: string[], joinerSocket: Socket): Promise<void> {
+    if (!this.muteService) {
+      joinerSocket.to(channelId).emit('playerJoined', { username: joinerUsername, players: allPlayers, channelId } as PlayerJoinedEvent);
+      return;
+    }
+
+    const playersSnapshot = [...allPlayers];
+    for (const playerUsername of playersSnapshot) {
+      if (playerUsername === joinerUsername) continue;
+
+      const socketId = this.userToSocket.get(playerUsername);
+      if (!socketId) continue;
+
+      const playerSocket = this.io.sockets.sockets.get(socketId);
+      if (!playerSocket) continue;
+
+      const hasMuted = await this.muteService.hasMuted(playerUsername, joinerUsername);
+      if (hasMuted) continue;
+
+      const visiblePlayers = await this.filterPlayersForUser(playerUsername, playersSnapshot);
+      playerSocket.emit('playerJoined', { username: joinerUsername, players: visiblePlayers, channelId } as PlayerJoinedEvent);
+    }
+  }
+
+  // Sends playerLeft and chatChannelState to remaining players, respecting mute lists
+  private async sendFilteredPlayerLeft(channelId: string, leaverUsername: string, remainingPlayers: string[], lastUpdated: number): Promise<void> {
+    if (!this.muteService) {
+      this.io.to(channelId).emit('playerLeft', { username: leaverUsername, players: remainingPlayers, channelId } as PlayerLeftEvent);
+      this.io.to(channelId).emit('chatChannelState', { channelId, players: remainingPlayers, lastUpdated } as ChatChannelState);
+      return;
+    }
+
+    const playersSnapshot = [...remainingPlayers];
+    for (const playerUsername of playersSnapshot) {
+      const socketId = this.userToSocket.get(playerUsername);
+      if (!socketId) continue;
+
+      const playerSocket = this.io.sockets.sockets.get(socketId);
+      if (!playerSocket) continue;
+
+      const hadMuted = await this.muteService.hasMuted(playerUsername, leaverUsername);
+      if (hadMuted) {
+        // Player never saw the leaver — their state is already correct, no update needed
+        continue;
+      }
+
+      const visiblePlayers = await this.filterPlayersForUser(playerUsername, playersSnapshot);
+      playerSocket.emit('playerLeft', { username: leaverUsername, players: visiblePlayers, channelId } as PlayerLeftEvent);
+      playerSocket.emit('chatChannelState', { channelId, players: visiblePlayers, lastUpdated } as ChatChannelState);
+    }
+  }
+
+  // Broadcasts a chat message or emote, skipping recipients who have muted the sender
+  private async broadcastMessageFiltered(channelId: string, event: string, data: ChatMessage | EmoteMessage, senderUsername: string): Promise<void> {
+    const channel = this.chatChannels.get(channelId);
+    if (!channel) return;
+
+    if (!this.muteService) {
+      this.io.to(channelId).emit(event, data);
+      return;
+    }
+
+    const playersSnapshot = [...channel.players];
+    for (const playerUsername of playersSnapshot) {
+      const socketId = this.userToSocket.get(playerUsername);
+      if (!socketId) continue;
+
+      const hasMuted = await this.muteService.hasMuted(playerUsername, senderUsername);
+      if (hasMuted) continue;
+
+      const playerSocket = this.io.sockets.sockets.get(socketId);
+      playerSocket?.emit(event, data);
+    }
+  }
+
   // Join a chat channel
   joinChannel(socket: Socket, data: JoinChatChannelData & { username: string }): void {
     this.logger.debug(`[ChatService] joinChannel: username=${data.username}, channelId=${data.channelId}`);
-    
+
     const { channelId, username } = data;
-    
+
     if (!channelId || !username) {
       socket.emit('error', { message: 'Missing channelId or username' });
       return;
@@ -180,10 +277,10 @@ class ChatService implements ChatServiceInterface {
     // Track user
     this.socketToUser.set(socket.id, username);
     this.userToSocket.set(username, socket.id);
-    
+
     // Join socket room
     socket.join(channelId);
-    
+
     // Initialize or update channel
     if (!this.chatChannels.has(channelId)) {
       this.chatChannels.set(channelId, {
@@ -191,9 +288,9 @@ class ChatService implements ChatServiceInterface {
         lastUpdated: Date.now()
       });
     }
-    
+
     const channel = this.chatChannels.get(channelId)!;
-    
+
     // Clean up any stale entries - remove players who are no longer connected
     const connectedPlayers = Array.from(this.userToSocket.keys());
     const oldPlayers = [...channel.players];
@@ -206,24 +303,24 @@ class ChatService implements ChatServiceInterface {
 
     const wasAlreadyInChannel = channel.players.includes(username);
     this.logger.debug(`[ChatService] User ${username} joining channel ${channelId}, players: ${JSON.stringify(channel.players)}`);
-    
+
     if (!wasAlreadyInChannel) {
       channel.players.push(username);
       channel.lastUpdated = Date.now();
 
       this.curationService?.recordVisit(channelId, username);
+      this.muteService?.prefetch(username);
 
-      const playerJoinedEvent: PlayerJoinedEvent = { username, players: channel.players, channelId };
-      socket.to(channelId).emit('playerJoined', playerJoinedEvent);
+      this.sendFilteredPlayerJoined(channelId, username, channel.players, socket)
+        .catch(err => this.logger.error(`[ChatService] Error sending playerJoined: ${err}`));
     }
 
-    // Always send current channel state to the joining player
-    const chatChannelState: ChatChannelState = {
-      channelId,
-      players: channel.players,
-      lastUpdated: channel.lastUpdated
-    };
-    socket.emit('chatChannelState', chatChannelState);
+    // Send current channel state (filtered) to the joining player
+    this.sendFilteredChannelState(socket, channelId, channel.players, channel.lastUpdated)
+      .catch(err => {
+        this.logger.error(`[ChatService] Error sending chatChannelState: ${err}`);
+        socket.emit('chatChannelState', { channelId, players: channel.players, lastUpdated: channel.lastUpdated } as ChatChannelState);
+      });
 
     this.logger.info(`User ${username} joined chat channel ${channelId}`);
   }
@@ -231,74 +328,76 @@ class ChatService implements ChatServiceInterface {
   // Leave a chat channel
   leaveChannel(socket: Socket, data: LeaveChatChannelData): void {
     const { channelId, username } = data;
-    
+
     if (!channelId || !username) {
       socket.emit('error', { message: 'Missing channelId or username' });
       return;
     }
-    
+
     // Leave socket room
     socket.leave(channelId);
-    
+
     // Remove user from channel
     this.removeUserFromChannel(channelId, username);
-    
+
     this.logger.info(`User ${username} left chat channel ${channelId}`);
   }
 
   // Handle chat message
   handleMessage(socket: Socket, data: ChatMessageData & { username: string }): void {
     const { channelId, username, message } = data;
-    
+
     if (!channelId || !username || !message) {
       socket.emit('error', { message: 'Missing required fields' });
       return;
     }
-    
+
     // Validate user is in channel
     const channel = this.chatChannels.get(channelId);
     if (!channel || !channel.players.includes(username)) {
       socket.emit('error', { message: 'Not in channel' });
       return;
     }
-    
-    // Broadcast message to channel
+
     const chatMessage: ChatMessage = {
       username,
       message,
       timestamp: Date.now(),
       channelId
     };
-    this.broadcastToChannel(channelId, 'chatMessage', chatMessage);
-    
+
+    this.broadcastMessageFiltered(channelId, 'chatMessage', chatMessage, username)
+      .catch(err => this.logger.error(`[ChatService] Error broadcasting message: ${err}`));
+
     this.logger.info(`Chat message from ${username} in ${channelId}: ${message}`);
   }
 
   // Handle emote
   handleEmote(socket: Socket, data: EmoteData & { username: string }): void {
     const { channelId, username, emote } = data;
-    
+
     if (!channelId || !username || !emote) {
       socket.emit('error', { message: 'Missing required fields' });
       return;
     }
-    
+
     // Validate user is in channel
     const channel = this.chatChannels.get(channelId);
     if (!channel || !channel.players.includes(username)) {
       socket.emit('error', { message: 'Not in channel' });
       return;
     }
-    
-    // Broadcast emote to channel
+
     const emoteMessage: EmoteMessage = {
       username,
       emote,
       timestamp: Date.now(),
       channelId
     };
-    this.broadcastToChannel(channelId, 'emote', emoteMessage);
-    
+
+    this.broadcastMessageFiltered(channelId, 'emote', emoteMessage, username)
+      .catch(err => this.logger.error(`[ChatService] Error broadcasting emote: ${err}`));
+
     this.logger.info(`Emote from ${username} in ${channelId}: ${emote}`);
   }
 
@@ -315,19 +414,12 @@ class ChatService implements ChatServiceInterface {
       this.chatChannels.delete(channelId);
       this.logger.info(`Cleaned up empty chat channel: ${channelId}`);
     } else if (wasInChannel) {
-      const playerLeftEvent: PlayerLeftEvent = { username, players: channel.players, channelId };
-      this.broadcastToChannel(channelId, 'playerLeft', playerLeftEvent);
-
-      const chatChannelState: ChatChannelState = {
-        channelId,
-        players: channel.players,
-        lastUpdated: channel.lastUpdated
-      };
-      this.broadcastToChannel(channelId, 'chatChannelState', chatChannelState);
+      this.sendFilteredPlayerLeft(channelId, username, channel.players, channel.lastUpdated)
+        .catch(err => this.logger.error(`[ChatService] Error sending playerLeft: ${err}`));
     }
   }
 
-  // Broadcast to channel
+  // Broadcast to channel (unfiltered — used as fallback when muteService is null)
   private broadcastToChannel(channelId: string, event: string, data: any): void {
     this.logger.debug(`Broadcasting ${event} to ${channelId}:`, data);
     this.io.to(channelId).emit(event, data);
@@ -379,17 +471,17 @@ class ChatService implements ChatServiceInterface {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
-    
+
     // Clear all pending keepalive requests
     for (const [_username, keepaliveData] of this.keepaliveRequests.entries()) {
       clearTimeout(keepaliveData.timeoutId);
     }
     this.keepaliveRequests.clear();
-    
+
     this.chatChannels.clear();
     this.socketToUser.clear();
     this.userToSocket.clear();
   }
 }
 
-export default ChatService; 
+export default ChatService;
