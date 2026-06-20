@@ -89,8 +89,8 @@ SOCKET_RATE_LIMIT_MAX_CONNECTIONS=10
 // Default Socket.IO Configuration
 {
   cors: {
-    origin: process.env.NODE_ENV === 'production' 
-      ? ['https://leaf-game.herokuapp.com', 'https://leaf-game.netlify.app']
+    origin: process.env.NODE_ENV === 'production'
+      ? process.env.REACT_APP_PRODUCTION_URL  // e.g. your frontend domain
       : '*',
     methods: ['GET', 'POST'],
     credentials: true
@@ -182,12 +182,23 @@ socket.on('chatMessage', (data) => {
 - **Channel Management**: Create, join, leave chat channels
 - **Message Broadcasting**: Distribute messages to all players in a room
 - **Player Tracking**: Track who is in each channel
-- **Keepalive Management**: Detect and clean up stale connections
+- **Keepalive Management**: Detect and clean up stale connections (10s timeout, 5-min sweep)
 
 #### UserService
 - **User Registration**: Register users for chat functionality
 - **Connection Tracking**: Map socket IDs to usernames
 - **Status Management**: Track online/offline status
+
+#### CurationService
+- **Room Popularity Tracking**: Records unique visitors per room
+- **Auto-voting**: Daily curation job votes on the top N rooms using `HIVE_POSTING_KEY`
+- **Configurable**: `CURATION_TOP_N`, `CURATION_VOTE_WEIGHT`, `CURATION_INTERVAL_MS`
+
+#### BuilderService
+- **Progress Tracking**: Monitors unique rooms visited and total play time per player
+- **Auto-promotion**: Promotes eligible players to Builder role via Hive community custom_json
+- **Configurable**: `BUILDER_EXPLORER_ROOMS` (default 25), `BUILDER_CHRONICLER_HOURS` (default 5)
+- Requires `HIVE_POSTING_KEY` — silently no-ops if not set
 
 ### Data Flow
 
@@ -209,7 +220,14 @@ socket.on('chatMessage', (data) => {
 ### Health Check Endpoint
 ```bash
 GET /health
-Response: { status: "healthy", timestamp: "2024-01-01T00:00:00.000Z" }
+Response: {
+  "status": "ok",
+  "timestamp": "2026-01-01T00:00:00.000Z",
+  "services": {
+    "chat": { "activeChannels": 0, "connectedUsers": 0, "channels": [] },
+    "users": { "connectedUsers": 0, "totalSessions": 0, "onlineUsers": [], "adminAccounts": ["hive-109456"] }
+  }
+}
 ```
 
 ### Logging
@@ -227,14 +245,11 @@ Response: { status: "healthy", timestamp: "2024-01-01T00:00:00.000Z" }
 
 ### Running Tests
 ```bash
-# All tests
+# All tests (with coverage — 70% threshold enforced)
 npm test
 
-# With coverage
+# With coverage report
 npm run test:coverage
-
-# Watch mode
-npm run test:watch
 ```
 
 ### Test Structure

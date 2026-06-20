@@ -8,6 +8,7 @@ import ChatService from './services/ChatService';
 import UserService from './services/UserService';
 import CurationService from './services/CurationService';
 import BuilderService from './services/BuilderService';
+import MuteService from './services/MuteService';
 import config from './config';
 import Logger from './utils/Logger';
 import { 
@@ -110,13 +111,15 @@ const io = new SocketIOServer(server, {
 const postingKey = process.env['HIVE_POSTING_KEY'] || null;
 const curationService = new CurationService(logger, config.game.account, postingKey);
 const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
-const chatService = new ChatService(io, logger, curationService);
+const muteService = new MuteService(logger, config.hive.nodes[0]);
+const chatService = new ChatService(io, logger, curationService, muteService);
 const userService = new UserService(io, logger);
 
 // Cleanup function for tests
 const cleanup = () => {
   chatService.cleanup();
   curationService.cleanup();
+  muteService.cleanup();
 };
 
 // Export cleanup for tests
