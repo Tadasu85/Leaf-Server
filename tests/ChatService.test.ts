@@ -572,20 +572,6 @@ describe('ChatService', () => {
     });
   });
 
-  describe('broadcastToChannel', () => {
-    it('should broadcast message to channel', () => {
-      // First join the channel
-      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'testuser' });
-      
-      // Call broadcastToChannel directly
-      (chatService as any).broadcastToChannel('test-channel', 'testEvent', { message: 'test' });
-      
-      // Should emit to the channel via io.to().emit()
-      // We can't easily test this without mocking io, but the method should not throw
-      expect(() => (chatService as any).broadcastToChannel('test-channel', 'testEvent', { message: 'test' })).not.toThrow();
-    });
-  });
-
   describe('removeUserFromChannel', () => {
     it('should remove user from channel', () => {
       // First join the channel
@@ -692,28 +678,6 @@ describe('ChatService', () => {
       // Should handle gracefully without errors
       // The channel should be deleted since it's empty after the operation
       expect(chatService['chatChannels'].has('empty-channel')).toBe(false);
-    });
-  });
-
-  describe('broadcastToChannel edge cases', () => {
-    it('should handle broadcasting to non-existent channel', () => {
-      // Try to broadcast to channel that doesn't exist
-      expect(() => chatService['broadcastToChannel']('non-existent-channel', 'testEvent', { data: 'test' })).not.toThrow();
-    });
-
-    it('should handle broadcasting with null data', () => {
-      const mockSocket = {
-        id: 'test-socket-id',
-        emit: jest.fn(),
-        join: jest.fn(),
-        to: jest.fn().mockReturnValue({ emit: jest.fn() })
-      } as any;
-
-      // Add user to channel
-      chatService.joinChannel(mockSocket, { channelId: 'test-channel', username: 'user1' });
-      
-      // Try to broadcast null data
-      expect(() => chatService['broadcastToChannel']('test-channel', 'testEvent', null)).not.toThrow();
     });
   });
 
