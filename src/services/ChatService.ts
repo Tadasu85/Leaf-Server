@@ -419,12 +419,6 @@ class ChatService implements ChatServiceInterface {
     }
   }
 
-  // Broadcast to channel (unfiltered — used as fallback when muteService is null)
-  private broadcastToChannel(channelId: string, event: string, data: any): void {
-    this.logger.debug(`Broadcasting ${event} to ${channelId}:`, data);
-    this.io.to(channelId).emit(event, data);
-  }
-
   // Get channel info
   getChannelInfo(channelId: string): ChatChannel | null {
     return this.chatChannels.get(channelId) || null;
