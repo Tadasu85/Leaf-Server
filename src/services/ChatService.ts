@@ -94,6 +94,8 @@ class ChatService implements ChatServiceInterface {
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) {
       this.logger.warn(`[ChatService] Cannot send keepalive to ${username} - socket not found`);
+      // The mapping points at a socket that no longer exists, so the player is gone
+      this.handleKeepaliveTimeout(username);
       return;
     }
 
@@ -430,23 +432,33 @@ class ChatService implements ChatServiceInterface {
   }
 
   // Clean up stale players from all channels using keepalive system
+  // Players listed in a channel who no longer have a socket can't answer a
+  // keepalive (there's nothing to send it to), so they are removed directly.
+  // Players who still have a socket are sent a keepalive; the client replies
+  // with 'keepalive', and handleKeepaliveTimeout removes anyone who doesn't.
   private cleanupStalePlayers(): void {
-    const connectedPlayers = Array.from(this.userToSocket.keys());
-    let keepaliveSent = 0;
+    const connectedPlayers = new Set(this.userToSocket.keys());
+    const toPing = new Set<string>();
+    let removed = 0;
 
-    for (const [_channelId, channel] of this.chatChannels.entries()) {
-      const stalePlayers = channel.players.filter(player => !connectedPlayers.includes(player));
-
-      stalePlayers.forEach(player => {
-        if (!this.keepaliveRequests.has(player)) {
-          this.sendKeepaliveRequest(player);
-          keepaliveSent++;
+    for (const [channelId, channel] of Array.from(this.chatChannels.entries())) {
+      for (const player of [...channel.players]) {
+        if (connectedPlayers.has(player)) {
+          toPing.add(player);
+        } else {
+          this.removeUserFromChannel(channelId, player);
+          this.clearKeepaliveRequest(player);
+          removed++;
         }
-      });
+      }
     }
 
-    if (keepaliveSent > 0) {
-      this.logger.info(`[ChatService] Sent keepalive requests to ${keepaliveSent} potentially stale players`);
+    toPing.forEach(player => {
+      if (!this.keepaliveRequests.has(player)) this.sendKeepaliveRequest(player);
+    });
+
+    if (removed > 0) {
+      this.logger.info(`[ChatService] Removed ${removed} stale player entries with no socket`);
     }
   }
 

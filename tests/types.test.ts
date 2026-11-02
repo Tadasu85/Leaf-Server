@@ -292,14 +292,11 @@ describe('Type Definitions', () => {
         services: {
           chat: {
             activeChannels: 3,
-            connectedUsers: 8,
-            channels: ['channel1', 'channel2']
+            connectedUsers: 8
           },
           users: {
             connectedUsers: 8,
-            totalSessions: 12,
-            onlineUsers: ['user1', 'user2'],
-            adminAccounts: ['admin1']
+            totalSessions: 12
           }
         }
       };

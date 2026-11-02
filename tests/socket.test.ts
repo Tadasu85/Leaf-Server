@@ -157,6 +157,11 @@ describe('Socket.IO Tests', () => {
       setTimeout(done, 50);
     });
 
+    it('should handle the client keepalive reply event', (done) => {
+      testSocket.emit('keepalive');
+      setTimeout(done, 50);
+    });
+
     it('should handle disconnect event', (done) => {
       testSocket.on('disconnect', () => {
         expect(testSocket.connected).toBe(false);

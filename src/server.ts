@@ -304,7 +304,12 @@ io.on('connection', (socket) => {
   });
 
   // Handle keepalive response
+  // The client replies to a keepalive by emitting 'keepalive' back;
+  // 'keepaliveResponse' is accepted too for compatibility.
   socket.on('keepaliveResponse', () => {
+    chatService.handleKeepaliveResponse(socket);
+  });
+  socket.on('keepalive', () => {
     chatService.handleKeepaliveResponse(socket);
   });
 
@@ -352,13 +357,17 @@ app.get('/curation/dryrun', (_req: Request, res: Response) => {
 });
 
 // Health check endpoint
+// Public endpoint: counts only. Usernames, admin accounts and channel names
+// (which reveal where players are) are not exposed.
 app.get('/health', (_req: Request, res: Response) => {
+  const chat = chatService.getStatus();
+  const users = userService.getStatus();
   const response: HealthCheckResponse = {
     status: 'ok',
     timestamp: new Date().toISOString(),
     services: {
-      chat: chatService.getStatus(),
-      users: userService.getStatus()
+      chat: { activeChannels: chat.activeChannels, connectedUsers: chat.connectedUsers },
+      users: { connectedUsers: users.connectedUsers, totalSessions: users.totalSessions }
     }
   };
   res.json(response);

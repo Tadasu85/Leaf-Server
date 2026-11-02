@@ -24,11 +24,16 @@ describe('Server Integration Tests', () => {
       
       expect(response.body.services.chat).toHaveProperty('activeChannels');
       expect(response.body.services.chat).toHaveProperty('connectedUsers');
-      expect(response.body.services.chat).toHaveProperty('channels');
       expect(response.body.services.users).toHaveProperty('connectedUsers');
       expect(response.body.services.users).toHaveProperty('totalSessions');
-      expect(response.body.services.users).toHaveProperty('onlineUsers');
-      expect(response.body.services.users).toHaveProperty('adminAccounts');
+    });
+
+    it('should not expose usernames, admin accounts or channel names', async () => {
+      const response = await request(app).get('/health');
+
+      expect(response.body.services.chat).not.toHaveProperty('channels');
+      expect(response.body.services.users).not.toHaveProperty('onlineUsers');
+      expect(response.body.services.users).not.toHaveProperty('adminAccounts');
     });
   });
 

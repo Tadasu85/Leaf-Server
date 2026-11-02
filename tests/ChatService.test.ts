@@ -563,12 +563,26 @@ describe('ChatService', () => {
       // Call cleanupStalePlayers directly
       (chatService as any).cleanupStalePlayers();
       
-      // In the actual implementation, cleanupStalePlayers only sends keepalive requests
-      // and doesn't immediately remove players. The test should reflect this behavior.
+      // Players with no socket can't answer a keepalive, so they are removed directly
       const channelInfo = chatService.getChannelInfo('test-channel');
-      expect(channelInfo?.players).toContain('disconnected-user'); // Player should still be there initially
-      
-      // The keepalive system would remove them after timeout, but that's not tested here
+      expect(channelInfo?.players ?? []).not.toContain('disconnected-user');
+    });
+
+    it('should keep players who still have a live socket and send them a keepalive', () => {
+      const liveSocket = { emit: jest.fn() };
+      const getSpy = jest.spyOn(io.sockets.sockets, 'get').mockReturnValue(liveSocket as any);
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'connected-user' });
+      (chatService as any).cleanupStalePlayers();
+      expect(chatService.getChannelInfo('test-channel')?.players).toContain('connected-user');
+      expect(liveSocket.emit).toHaveBeenCalledWith('keepalive', expect.any(Object));
+      chatService['clearKeepaliveRequest']('connected-user');
+      getSpy.mockRestore();
+    });
+
+    it('should remove players whose socket no longer exists', () => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'test-channel', username: 'ghost-user' });
+      (chatService as any).cleanupStalePlayers();
+      expect(chatService.getChannelInfo('test-channel')?.players ?? []).not.toContain('ghost-user');
     });
   });
 
@@ -708,13 +722,9 @@ describe('ChatService', () => {
       // Run cleanup
       chatService['cleanupStalePlayers']();
       
-      // In the actual implementation, cleanupStalePlayers only sends keepalive requests
-      // and doesn't immediately remove players. The test should reflect this behavior.
-      expect(chatService['chatChannels'].has('test-channel')).toBe(true);
+      // Stale players are removed, and the now-empty channel goes with them
       const channelInfo = chatService.getChannelInfo('test-channel');
-      expect(channelInfo?.players).toContain('stale-user'); // Player should still be there initially
-      
-      // The keepalive system would remove them after timeout, but that's not tested here
+      expect(channelInfo?.players ?? []).not.toContain('stale-user');
     });
   });
 

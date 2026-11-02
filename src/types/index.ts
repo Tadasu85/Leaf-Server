@@ -89,8 +89,8 @@ export interface HealthCheckResponse {
   status: 'ok';
   timestamp: string;
   services: {
-    chat: ChatServiceStatus;
-    users: UserServiceStatus;
+    chat: Pick<ChatServiceStatus, 'activeChannels' | 'connectedUsers'>;
+    users: Pick<UserServiceStatus, 'connectedUsers' | 'totalSessions'>;
   };
 }
 
