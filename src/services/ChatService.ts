@@ -19,6 +19,8 @@ import {
 import CurationService from './CurationService';
 import MuteService from './MuteService';
 
+export const MAX_MESSAGE_LENGTH = 500; // matches the client's input limit
+
 class ChatService implements ChatServiceInterface {
   private io: SocketIOServer;
   private logger: Logger;
@@ -352,6 +354,11 @@ class ChatService implements ChatServiceInterface {
       return;
     }
 
+    if (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH) {
+      socket.emit('error', { message: `Message too long (max ${MAX_MESSAGE_LENGTH} characters)` });
+      return;
+    }
+
     // Validate user is in channel
     const channel = this.chatChannels.get(channelId);
     if (!channel || !channel.players.includes(username)) {
@@ -378,6 +385,11 @@ class ChatService implements ChatServiceInterface {
 
     if (!channelId || !username || !emote) {
       socket.emit('error', { message: 'Missing required fields' });
+      return;
+    }
+
+    if (typeof emote !== 'string' || emote.length > MAX_MESSAGE_LENGTH) {
+      socket.emit('error', { message: `Emote too long (max ${MAX_MESSAGE_LENGTH} characters)` });
       return;
     }
 

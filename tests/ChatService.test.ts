@@ -1,6 +1,6 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { createServer } from 'http';
-import ChatService from '../src/services/ChatService';
+import ChatService, { MAX_MESSAGE_LENGTH } from '../src/services/ChatService';
 import Logger from '../src/utils/Logger';
 import { Socket } from 'socket.io';
 
@@ -809,4 +809,26 @@ describe('ChatService', () => {
       // If you want to validate emote types, add validation in the service
     });
   });
-}); 
+
+  describe('message length limits', () => {
+    beforeEach(() => {
+      chatService.joinChannel(mockSocket as Socket, { channelId: 'len-channel', username: 'testuser' });
+      mockSocket.emit.mockClear();
+    });
+
+    it('rejects chat messages over the limit', () => {
+      chatService.handleMessage(mockSocket as Socket, { channelId: 'len-channel', username: 'testuser', message: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) });
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: `Message too long (max ${MAX_MESSAGE_LENGTH} characters)` });
+    });
+
+    it('accepts chat messages at the limit', () => {
+      chatService.handleMessage(mockSocket as Socket, { channelId: 'len-channel', username: 'testuser', message: 'x'.repeat(MAX_MESSAGE_LENGTH) });
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('error', expect.anything());
+    });
+
+    it('rejects emotes over the limit', () => {
+      chatService.handleEmote(mockSocket as Socket, { channelId: 'len-channel', username: 'testuser', emote: 'x'.repeat(MAX_MESSAGE_LENGTH + 1) });
+      expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: `Emote too long (max ${MAX_MESSAGE_LENGTH} characters)` });
+    });
+  });
+});

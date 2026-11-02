@@ -7,6 +7,8 @@ import rateLimit from 'express-rate-limit';
 import ChatService from './services/ChatService';
 import UserService from './services/UserService';
 import CurationService from './services/CurationService';
+import RoomRegistry from './services/RoomRegistry';
+import { getClientIP } from './utils/clientIP';
 import BuilderService from './services/BuilderService';
 import MuteService from './services/MuteService';
 import config from './config';
@@ -84,6 +86,8 @@ const socketRateLimits = new Map<string, {
   connections: number;
   joinLeaveCount: number;
   lastJoinLeaveReset: number;
+  emoteCount: number;
+  lastEmoteReset: number;
 }>();
 
 // Create Socket.IO server
@@ -109,7 +113,11 @@ const io = new SocketIOServer(server, {
 
 // Initialize services
 const postingKey = process.env['HIVE_POSTING_KEY'] || null;
-const curationService = new CurationService(logger, config.game.account, postingKey);
+const roomRegistry = new RoomRegistry(logger, config.game.account, config.hive.nodes[0]);
+if (process.env['NODE_ENV'] !== 'test') {
+  roomRegistry.refresh().catch(() => undefined);
+}
+const curationService = new CurationService(logger, config.game.account, postingKey, roomRegistry);
 const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
 const muteService = new MuteService(logger, config.hive.nodes[0]);
 const chatService = new ChatService(io, logger, curationService, muteService);
@@ -137,7 +145,10 @@ io.engine.on('connection_error', (err: Error) => {
 // Socket connection handling
 io.on('connection', (socket) => {
   const username = socket.handshake.query['username'] as string;
-  const userIP = socket.handshake.address;
+  // Behind Render's proxy, handshake.address is the proxy, so every player
+  // would share one rate-limit bucket. Use the client address the proxy
+  // appended (rightmost X-Forwarded-For entry), matching `trust proxy = 1`.
+  const userIP = getClientIP(socket.handshake.headers['x-forwarded-for'], socket.handshake.address);
   
   logger.info(`New socket connection: ${socket.id}, username: ${username}, IP: ${userIP}`);
   
@@ -155,6 +166,8 @@ io.on('connection', (socket) => {
     connections: number;
     joinLeaveCount: number;
     lastJoinLeaveReset: number;
+    emoteCount: number;
+    lastEmoteReset: number;
   } | undefined;
   
   if (process.env['NODE_ENV'] !== 'test') {
@@ -164,7 +177,9 @@ io.on('connection', (socket) => {
         lastReset: Date.now(),
         connections: 0,
         joinLeaveCount: 0,
-        lastJoinLeaveReset: Date.now()
+        lastJoinLeaveReset: Date.now(),
+        emoteCount: 0,
+        lastEmoteReset: Date.now()
       });
     }
     
@@ -275,18 +290,18 @@ io.on('connection', (socket) => {
     // Rate limit emotes (skip in test environment)
     if (process.env['NODE_ENV'] !== 'test' && userLimit) {
       const now = Date.now();
-      if (now - userLimit.lastReset > 60000) { // 1 minute
-        userLimit.messageCount = 0;
-        userLimit.lastReset = now;
+      if (now - userLimit.lastEmoteReset > 60000) { // 1 minute
+        userLimit.emoteCount = 0;
+        userLimit.lastEmoteReset = now;
       }
       
-      if (userLimit.messageCount > 30) { // max 30 emotes per minute
+      if (userLimit.emoteCount > 30) { // max 30 emotes per minute
         logger.warn(`Rate limit exceeded for emotes: ${socket.handshake.query['username']} (${userIP})`);
         socket.emit('error', { message: 'Too many emotes. Please wait a moment.' });
         return;
       }
       
-      userLimit.messageCount++;
+      userLimit.emoteCount++;
     }
     
     const username = userService.getUserBySocket(socket.id);
