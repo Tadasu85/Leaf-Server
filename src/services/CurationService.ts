@@ -1,5 +1,6 @@
 import { Client, PrivateKey } from '@hiveio/dhive';
 import { Logger } from '../types';
+import RoomRegistry from './RoomRegistry';
 
 interface RoomScore {
   uniqueVisitors: Set<string>;
@@ -15,9 +16,11 @@ class CurationService {
   private readonly INTERVAL_MS: number;
   private readonly TOP_N: number;
   private readonly VOTE_WEIGHT: number;
+  private roomRegistry: RoomRegistry | null;
 
-  constructor(logger: Logger, gameAccount: string, postingKey: string | null) {
+  constructor(logger: Logger, gameAccount: string, postingKey: string | null, roomRegistry: RoomRegistry | null = null) {
     this.logger = logger;
+    this.roomRegistry = roomRegistry;
     this.gameAccount = gameAccount;
     this.postingKey = postingKey;
     this.client = new Client(['https://api.hive.blog']);
@@ -55,6 +58,15 @@ class CurationService {
   }
 
   recordVisit(channelId: string, username: string): void {
+    // Only count rooms that are in the game's map. Until the map has loaded
+    // once, visits are recorded and filtered again at vote time.
+    if (this.roomRegistry?.isLoaded()) {
+      const parsed = CurationService.parseChannelId(channelId);
+      if (!parsed || !this.roomRegistry.isKnownRoom(parsed.author, parsed.permlink)) {
+        this.logger.debug(`[CurationService] Ignoring visit to unknown room ${channelId}`);
+        return;
+      }
+    }
     if (!this.scores.has(channelId)) {
       this.scores.set(channelId, { uniqueVisitors: new Set() });
     }
@@ -79,15 +91,26 @@ class CurationService {
     }
   }
 
-  private async voteRoom(channelId: string, score: number): Promise<void> {
+  static parseChannelId(channelId: string): { author: string; permlink: string } | null {
     const slashIndex = channelId.indexOf('/');
-    if (slashIndex === -1) {
+    if (slashIndex <= 0 || slashIndex === channelId.length - 1) return null;
+    return { author: channelId.slice(0, slashIndex), permlink: channelId.slice(slashIndex + 1) };
+  }
+
+  private async voteRoom(channelId: string, score: number): Promise<void> {
+    const parsed = CurationService.parseChannelId(channelId);
+    if (!parsed) {
       this.logger.warn(`[CurationService] Invalid channelId format: ${channelId}`);
       return;
     }
+    const { author, permlink } = parsed;
 
-    const author = channelId.slice(0, slashIndex);
-    const permlink = channelId.slice(slashIndex + 1);
+    // Never vote on a post that isn't a room in the game's map (fails closed
+    // if the map can't be loaded).
+    if (!this.roomRegistry || !(await this.roomRegistry.verifyRoom(author, permlink))) {
+      this.logger.warn(`[CurationService] Skipping vote on ${channelId}: not a known room`);
+      return;
+    }
 
     try {
       const key = PrivateKey.fromString(this.postingKey!);
