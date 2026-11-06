@@ -1,0 +1,44 @@
+name: Mirror to GitLab
+
+# Render deploys from GitLab, so every push to main on GitHub is copied there.
+# Needs a repository secret GITLAB_TOKEN: a GitLab project access token with
+# the write_repository scope and the Maintainer role (so it can push to a
+# protected branch).
+# Optional repository variable GITLAB_BRANCH if Render watches a branch other
+# than main on GitLab (for example master).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: mirror-to-gitlab
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push main to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_REPO: Tadasu85/leaf_server
+          GITLAB_BRANCH: ${{ vars.GITLAB_BRANCH || 'main' }}
+        run: |
+          if [ -z "$GITLAB_TOKEN" ]; then
+            echo "::error::GITLAB_TOKEN secret is not set. Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          git remote add gitlab "https://oauth2:${GITLAB_TOKEN}@gitlab.com/${GITLAB_REPO}.git"
+          # Plain push, never --force: if GitLab has commits GitHub doesn't,
+          # this fails instead of throwing them away.
+          if ! git push gitlab "HEAD:refs/heads/${GITLAB_BRANCH}"; then
+            echo "::error::Push to GitLab was rejected. GitLab's ${GITLAB_BRANCH} probably has commits that are not on GitHub main. Reconcile them by hand, then re-run this workflow."
+            exit 1
+          fi
