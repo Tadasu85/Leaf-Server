@@ -81,7 +81,26 @@ RATE_LIMIT_WINDOW_MS=900000        # 15 minutes
 RATE_LIMIT_MAX_REQUESTS=100        # 100 requests per window
 SOCKET_RATE_LIMIT_WINDOW_MS=60000  # 1 minute
 SOCKET_RATE_LIMIT_MAX_CONNECTIONS=10
+
+# Chat login (Keychain-signed challenge)
+CHAT_AUTH=required                 # required (default) | optional | off
+CHAT_AUTH_SECRET=<long random string>  # signs session tokens; keep it stable so
+                                       # players aren't asked to sign again after each restart
 ```
+
+### Chat login
+
+Players prove they own their Hive account before joining chat:
+
+1. The client calls `GET /auth/challenge?username=alice` and gets a one-time message (valid 2 minutes).
+2. Keychain signs it with alice's posting key (`requestSignBuffer`).
+3. The client connects with Socket.IO `auth: { username, challenge, signature }`. The server recovers the
+   public key and checks it against alice's posting keys on chain, then emits `authenticated { username, sessionToken }`.
+4. Reconnects send `auth: { username, sessionToken }` (valid 7 days), so Keychain isn't prompted again.
+
+With `CHAT_AUTH=required` a connection without valid credentials gets a `connect_error` whose message starts
+with `auth_failed:`. `optional` still accepts unsigned `?username=` clients, but their room visits don't count
+towards curation and they can't rename themselves with `register`. Tests default to `off`.
 
 ### WebSocket Configuration
 

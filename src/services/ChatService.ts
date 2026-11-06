@@ -312,7 +312,11 @@ class ChatService implements ChatServiceInterface {
       channel.players.push(username);
       channel.lastUpdated = Date.now();
 
-      this.curationService?.recordVisit(channelId, username);
+      // When chat login is on, only visits from players who proved their
+      // account with Keychain count towards curation.
+      if (socket.data?.verified !== false) {
+        this.curationService?.recordVisit(channelId, username);
+      }
       this.muteService?.prefetch(username);
 
       this.sendFilteredPlayerJoined(channelId, username, channel.players, socket)
