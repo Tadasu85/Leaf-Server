@@ -1,4 +1,5 @@
 import { Server as SocketIOServer } from 'socket.io';
+import RoomModerationService, { channelAuthor } from './services/RoomModerationService';
 import { createServer } from 'http';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
@@ -121,6 +122,7 @@ if (process.env['NODE_ENV'] !== 'test') {
 const curationService = new CurationService(logger, config.game.account, postingKey, roomRegistry);
 const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
 const muteService = new MuteService(logger, config.hive.nodes[0]);
+const roomModeration = new RoomModerationService(logger);
 const chatService = new ChatService(io, logger, curationService, muteService);
 const userService = new UserService(io, logger);
 // Chat login (Keychain-signed challenge). CHAT_AUTH=required|optional|off, default required.
@@ -135,6 +137,7 @@ const authService = new AuthService(logger, {
 
 // Cleanup function for tests
 const cleanup = () => {
+  roomModeration.cleanup();
   chatService.cleanup();
   curationService.cleanup();
   muteService.cleanup();
@@ -287,6 +290,12 @@ io.on('connection', (socket) => {
       logger.warn('Attempted to join chat channel without username');
       return;
     }
+    // A room's author may have removed this player for a while
+    const blockedUntil = data?.channelId ? roomModeration.blockedUntil(data.channelId, username) : null;
+    if (blockedUntil) {
+      socket.emit('ejected', { channelId: data.channelId, by: channelAuthor(data.channelId), until: blockedUntil });
+      return;
+    }
     logger.info(`[Server] Calling chatService.joinChannel for user ${username}`);
     chatService.joinChannel(socket, { ...data, username });
   });
@@ -403,6 +412,36 @@ io.on('connection', (socket) => {
   });
 
   // Handle disconnection
+  // Room owners remove a player from a room they built (LambdaMOO's @eject)
+  socket.on('ejectPlayer', (data: { channelId?: unknown; target?: unknown }) => {
+    const requester = userService.getUserBySocket(socket.id);
+    const channelId = typeof data?.channelId === 'string' ? data.channelId : '';
+    const target = typeof data?.target === 'string' ? data.target.trim() : '';
+    if (!requester || !channelId || !target) {
+      socket.emit('ejectResult', { ok: false, message: 'Usage: eject <player>' });
+      return;
+    }
+    const decision = roomModeration.decide({
+      requester,
+      requesterIsGuest: Boolean(socket.data.guest) || /^Guest-\d{6}$/.test(requester),
+      requesterVerified: socket.data.verified !== false,
+      target,
+      channelId,
+      playersInRoom: chatService.getChannelInfo(channelId)?.players ?? []
+    });
+    if (!decision.ok) {
+      socket.emit('ejectResult', { ok: false, message: decision.reason });
+      return;
+    }
+    const targetSocket = userService.getSocketByUser(decision.target);
+    if (targetSocket) {
+      targetSocket.emit('ejected', { channelId, by: requester, until: decision.until });
+      chatService.leaveChannel(targetSocket, { channelId, username: decision.target });
+    }
+    io.to(channelId).emit('playerEjected', { channelId, target: decision.target, by: requester });
+    socket.emit('ejectResult', { ok: true, message: `You removed ${decision.target} from this room for 10 minutes.` });
+  });
+
   socket.on('disconnect', () => {
     // Clean up rate limiting data (skip in test environment)
     if (process.env['NODE_ENV'] !== 'test' && userLimit) {
