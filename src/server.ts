@@ -7,6 +7,7 @@ import rateLimit from 'express-rate-limit';
 import ChatService from './services/ChatService';
 import UserService from './services/UserService';
 import CurationService from './services/CurationService';
+import PrivateMessageService, { PrivateKind } from './services/PrivateMessageService';
 import RoomRegistry from './services/RoomRegistry';
 import { getClientIP } from './utils/clientIP';
 import BuilderService from './services/BuilderService';
@@ -119,6 +120,7 @@ if (process.env['NODE_ENV'] !== 'test') {
   roomRegistry.refresh().catch(() => undefined);
 }
 const curationService = new CurationService(logger, config.game.account, postingKey, roomRegistry);
+const privateMessages = new PrivateMessageService(logger);
 const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
 const muteService = new MuteService(logger, config.hive.nodes[0]);
 const chatService = new ChatService(io, logger, curationService, muteService);
@@ -139,6 +141,7 @@ const cleanup = () => {
   curationService.cleanup();
   muteService.cleanup();
   authService.cleanup();
+  privateMessages.cleanup();
 };
 
 // Export cleanup and authService for tests
@@ -291,6 +294,47 @@ io.on('connection', (socket) => {
     chatService.joinChannel(socket, { ...data, username });
   });
   
+  // page (anyone online) and whisper (same room). Never written to Hive.
+  const handlePrivateMessage = async (kind: PrivateKind, data: { target?: unknown; message?: unknown }) => {
+    const sender = userService.getUserBySocket(socket.id);
+    if (!sender) return;
+    const wanted = typeof data?.target === 'string' ? data.target.trim().replace(/^@/, '') : '';
+    const target = userService.getOnlineUsers().find(u => u.toLowerCase() === wanted.toLowerCase()) ?? wanted;
+    const targetSocket = target ? userService.getSocketByUser(target) : null;
+    const sameRoom = Boolean(targetSocket) && [...socket.rooms].some(r => r.includes('/') && targetSocket!.rooms.has(r));
+    const decision = privateMessages.check({
+      sender,
+      target,
+      message: typeof data?.message === 'string' ? data.message : '',
+      kind,
+      targetOnline: Boolean(targetSocket),
+      sameRoom
+    });
+    if (!decision.ok) {
+      socket.emit('privateResult', { ok: false, kind, target, message: decision.reason });
+      return;
+    }
+    // Respect the recipient's Hive mute list without telling the sender they're muted.
+    const muted = await muteService.hasMuted(target, sender).catch(() => false);
+    if (!muted) {
+      targetSocket!.emit('privateMessage', { kind, from: sender, message: decision.message });
+    }
+    socket.emit('privateResult', { ok: true, kind, target, message: decision.message });
+  };
+  socket.on('page', (data) => { void handlePrivateMessage('page', data); });
+  socket.on('whisper', (data) => { void handlePrivateMessage('whisper', data); });
+
+  // who: everyone online, minus admins and anyone the asker has muted on Hive
+  socket.on('who', async () => {
+    const asker = userService.getUserBySocket(socket.id);
+    if (!asker) return;
+    const muted = await muteService.getMutedUsers(asker).catch(() => new Set<string>());
+    const players = userService.filterAdminAccounts(userService.getOnlineUsers())
+      .filter(u => !muted.has(u))
+      .sort((a, b) => a.localeCompare(b));
+    socket.emit('whoList', { players });
+  });
+
   socket.on('leaveChatChannel', (data: LeaveChatChannelData) => {
     // Rate limit join/leave operations (skip in test environment)
     if (process.env['NODE_ENV'] !== 'test' && userLimit) {
