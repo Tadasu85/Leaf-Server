@@ -343,6 +343,27 @@ io.on('connection', (socket) => {
     chatService.handleMessage(socket, { ...data, username });
   });
   
+  // Room objects: the player says which object and verb they used in their
+  // room; each receiver shows the line the room's author wrote. No text is relayed.
+  socket.on('usedObject', async (data: { channelId?: unknown; object?: unknown; verb?: unknown }) => {
+    const user = userService.getUserBySocket(socket.id);
+    const channelId = typeof data?.channelId === 'string' ? data.channelId : '';
+    const object = typeof data?.object === 'string' ? data.object : '';
+    const verb = typeof data?.verb === 'string' ? data.verb : '';
+    if (!user || !socket.rooms.has(channelId) || !/^[a-z][a-z0-9 -]{0,29}$/.test(object) || !/^[a-z]{2,15}$/.test(verb)) return;
+    const now = Date.now();
+    const window = socket.data.objectWindow as { start: number; count: number } | undefined;
+    if (!window || now - window.start > 60000) socket.data.objectWindow = { start: now, count: 1 };
+    else if (++window.count > 20) return;
+    const receivers = await io.in(channelId).fetchSockets();
+    for (const receiver of receivers) {
+      if (receiver.id === socket.id) continue;
+      const name = userService.getUserBySocket(receiver.id);
+      if (name && await muteService.hasMuted(name, user).catch(() => false)) continue;
+      receiver.emit('playerUsedObject', { username: user, channelId, object, verb });
+    }
+  });
+
   socket.on('emote', (data: EmoteData) => {
     // Rate limit emotes (skip in test environment)
     if (process.env['NODE_ENV'] !== 'test' && userLimit) {
