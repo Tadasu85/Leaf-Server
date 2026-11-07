@@ -314,7 +314,8 @@ class ChatService implements ChatServiceInterface {
 
       // When chat login is on, only visits from players who proved their
       // account with Keychain count towards curation.
-      if (socket.data?.verified !== false) {
+      // Guests never count: anyone can make as many as they like.
+      if (socket.data?.verified !== false && !socket.data?.guest) {
         this.curationService?.recordVisit(channelId, username);
       }
       this.muteService?.prefetch(username);
