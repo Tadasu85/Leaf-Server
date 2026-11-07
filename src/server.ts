@@ -11,6 +11,7 @@ import RoomRegistry from './services/RoomRegistry';
 import { getClientIP } from './utils/clientIP';
 import BuilderService from './services/BuilderService';
 import MuteService from './services/MuteService';
+import AuthService, { parseAuthMode, AuthPayload } from './services/AuthService';
 import config from './config';
 import Logger from './utils/Logger';
 import { 
@@ -122,16 +123,26 @@ const builderService = new BuilderService(logger, config.game.account, config.ga
 const muteService = new MuteService(logger, config.hive.nodes[0]);
 const chatService = new ChatService(io, logger, curationService, muteService);
 const userService = new UserService(io, logger);
+// Chat login (Keychain-signed challenge). CHAT_AUTH=required|optional|off, default required.
+// Tests default to off so the existing suites can connect with ?username=.
+const authService = new AuthService(logger, {
+  mode: process.env['CHAT_AUTH']
+    ? parseAuthMode(process.env['CHAT_AUTH'])
+    : (process.env['NODE_ENV'] === 'test' ? 'off' : 'required'),
+  ...(process.env['CHAT_AUTH_SECRET'] ? { secret: process.env['CHAT_AUTH_SECRET'] } : {}),
+  hiveNode: config.hive.nodes[0] ?? 'https://api.hive.blog'
+});
 
 // Cleanup function for tests
 const cleanup = () => {
   chatService.cleanup();
   curationService.cleanup();
   muteService.cleanup();
+  authService.cleanup();
 };
 
-// Export cleanup for tests
-export { cleanup };
+// Export cleanup and authService for tests
+export { cleanup, authService };
 
 // Error handling
 server.on('error', (error: Error) => {
@@ -142,9 +153,47 @@ io.engine.on('connection_error', (err: Error) => {
   logger.error('Connection error:', err);
 });
 
+// Chat login: verify the Keychain signature or session token before the
+// socket is accepted. On failure in 'required' mode the client gets a
+// connect_error whose message starts with 'auth_failed:'.
+io.use((socket, next) => {
+  const mode = authService.getMode();
+  if (mode === 'off') return next();
+  const payload = (socket.handshake.auth ?? {}) as AuthPayload;
+  const hasCredentials = Boolean(payload.signature || payload.sessionToken);
+  if (!hasCredentials) {
+    if (mode === 'optional') {
+      socket.data.verified = false;
+      return next();
+    }
+    return next(new Error('auth_failed: missing credentials'));
+  }
+  authService.authenticate(payload).then((result) => {
+    if (result.ok) {
+      socket.data.verified = true;
+      socket.data.username = result.username;
+      socket.data.sessionToken = result.sessionToken;
+      socket.data.authMethod = result.method;
+      return next();
+    }
+    logger.warn(`[Auth] Rejected socket for ${String(payload.username)}: ${result.reason}`);
+    if (mode === 'optional') {
+      socket.data.verified = false;
+      return next();
+    }
+    return next(new Error(`auth_failed: ${result.reason}`));
+  }).catch((err) => {
+    logger.error('[Auth] Unexpected error during authentication:', err);
+    next(new Error('auth_failed: server error'));
+  });
+});
+
 // Socket connection handling
 io.on('connection', (socket) => {
-  const username = socket.handshake.query['username'] as string;
+  // A verified socket's name comes from its signature or token; the query
+  // string is only trusted when chat login is off or optional.
+  const username = (socket.data.username as string | undefined)
+    ?? (socket.handshake.query['username'] as string);
   // Behind Render's proxy, handshake.address is the proxy, so every player
   // would share one rate-limit bucket. Use the client address the proxy
   // appended (rightmost X-Forwarded-For entry), matching `trust proxy = 1`.
@@ -190,10 +239,18 @@ io.on('connection', (socket) => {
   // Initialize user and register with username from query
   userService.handleConnection(socket);
   userService.registerUser(socket, username);
+  if (socket.data.verified) {
+    socket.emit('authenticated', { username, sessionToken: socket.data.sessionToken });
+  }
   
   // Handle user registration
   socket.on('register', (data: RegisterData) => {
     const { username: registerUsername } = data;
+    if (registerUsername && registerUsername !== username && socket.data.verified !== undefined) {
+      // With chat login on, a socket can't switch to another account.
+      socket.emit('registered', { success: false, error: 'Username does not match login' });
+      return;
+    }
     if (registerUsername && registerUsername !== username) {
       // If username in register event differs from query username, update it
       userService.registerUser(socket, registerUsername);
@@ -359,6 +416,18 @@ io.on('connection', (socket) => {
     chatService.handleDisconnection(socket);
     logger.info(`Socket disconnected: ${socket.id}`);
   });
+});
+
+// Chat login challenge. The client signs this with Keychain (posting key)
+// and sends it in the socket handshake.
+app.get('/auth/challenge', (req: Request, res: Response) => {
+  const username = typeof req.query['username'] === 'string' ? req.query['username'] : '';
+  const issued = authService.issueChallenge(username);
+  if (!issued) {
+    res.status(400).json({ error: 'Invalid username' });
+    return;
+  }
+  res.json({ ...issued, mode: authService.getMode() });
 });
 
 // Curation dry run endpoint

@@ -841,4 +841,31 @@ describe('ChatService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('error', { message: `Emote too long (max ${MAX_MESSAGE_LENGTH} characters)` });
     });
   });
+  describe('curation visits and chat login', () => {
+    const makeService = () => {
+      const curation = { recordVisit: jest.fn() } as any;
+      return { curation, service: new ChatService(io, logger, curation) };
+    };
+
+    it('counts visits from verified sockets', () => {
+      const { curation, service } = makeService();
+      service.joinChannel({ ...mockSocket, data: { verified: true } } as Socket, { channelId: 'a/room', username: 'alice' });
+      expect(curation.recordVisit).toHaveBeenCalledWith('a/room', 'alice');
+      service.cleanup();
+    });
+
+    it('counts visits when chat login is off', () => {
+      const { curation, service } = makeService();
+      service.joinChannel({ ...mockSocket, data: {} } as Socket, { channelId: 'a/room', username: 'alice' });
+      expect(curation.recordVisit).toHaveBeenCalledWith('a/room', 'alice');
+      service.cleanup();
+    });
+
+    it('does not count visits from unverified sockets', () => {
+      const { curation, service } = makeService();
+      service.joinChannel({ ...mockSocket, data: { verified: false } } as Socket, { channelId: 'a/room', username: 'alice' });
+      expect(curation.recordVisit).not.toHaveBeenCalled();
+      service.cleanup();
+    });
+  });
 });
