@@ -386,6 +386,14 @@ io.on('connection', (socket) => {
   });
 
   // Builder path — client claims eligibility; server verifies on-chain and promotes
+  // The player changed their Hive mute list; reload it instead of waiting for the cache.
+  socket.on('refreshMutes', () => {
+    const who = userService.getUserBySocket(socket.id);
+    if (who && socket.data.verified !== false) {
+      muteService.refresh(who);
+    }
+  });
+
   socket.on('claimBuilder', async () => {
     const claimant = userService.getUserBySocket(socket.id);
     if (!claimant) {
