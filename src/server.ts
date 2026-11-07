@@ -11,7 +11,7 @@ import RoomRegistry from './services/RoomRegistry';
 import { getClientIP } from './utils/clientIP';
 import BuilderService from './services/BuilderService';
 import MuteService from './services/MuteService';
-import AuthService, { parseAuthMode, AuthPayload } from './services/AuthService';
+import AuthService, { parseAuthMode, AuthPayload, isGuestName } from './services/AuthService';
 import config from './config';
 import Logger from './utils/Logger';
 import { 
@@ -55,6 +55,27 @@ const socketLimiter = createRateLimiter(
   10, // 10 socket connections per minute per IP
   'Too many socket connections from this IP'
 );
+
+// Guest identities: 10 per hour per IP
+const guestLimiter = createRateLimiter(
+  60 * 60 * 1000,
+  10,
+  'Too many guest accounts from this IP'
+);
+
+// Guests may send at most this many chat messages and emotes per minute.
+const GUEST_MESSAGES_PER_MINUTE = 8;
+const guestMessageAllowed = (socket: { data: Record<string, any> }): boolean => {
+  if (!socket.data['guest']) return true;
+  const now = Date.now();
+  const window = socket.data['guestWindow'] as { start: number; count: number } | undefined;
+  if (!window || now - window.start > 60000) {
+    socket.data['guestWindow'] = { start: now, count: 1 };
+    return true;
+  }
+  window.count++;
+  return window.count <= GUEST_MESSAGES_PER_MINUTE;
+};
 
 // Create Express app
 const app = express();
@@ -194,6 +215,7 @@ io.on('connection', (socket) => {
   // string is only trusted when chat login is off or optional.
   const username = (socket.data.username as string | undefined)
     ?? (socket.handshake.query['username'] as string);
+  socket.data.guest = isGuestName(username);
   // Behind Render's proxy, handshake.address is the proxy, so every player
   // would share one rate-limit bucket. Use the client address the proxy
   // appended (rightmost X-Forwarded-For entry), matching `trust proxy = 1`.
@@ -340,6 +362,10 @@ io.on('connection', (socket) => {
       logger.warn('Attempted to send chat message without username');
       return;
     }
+    if (!guestMessageAllowed(socket)) {
+      socket.emit('error', { message: 'Guests can send a few messages a minute. Please wait a moment.' });
+      return;
+    }
     chatService.handleMessage(socket, { ...data, username });
   });
   
@@ -371,6 +397,10 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'Missing channelId or emote' });
       return;
     }
+    if (!guestMessageAllowed(socket)) {
+      socket.emit('error', { message: 'Guests can send a few messages a minute. Please wait a moment.' });
+      return;
+    }
     
     chatService.handleEmote(socket, { channelId: data.channelId, emote: data.emote, username });
   });
@@ -390,6 +420,10 @@ io.on('connection', (socket) => {
     const claimant = userService.getUserBySocket(socket.id);
     if (!claimant) {
       logger.warn('[Builder] claimBuilder received from unregistered socket');
+      return;
+    }
+    if (socket.data.guest) {
+      logger.info(`[Builder] Ignoring builder claim from guest ${claimant}`);
       return;
     }
     logger.info(`[Builder] ${claimant} is claiming builder eligibility`);
@@ -428,6 +462,16 @@ app.get('/auth/challenge', (req: Request, res: Response) => {
     return;
   }
   res.json({ ...issued, mode: authService.getMode() });
+});
+
+// Guest identity for players without a Hive account. Returns a server-chosen
+// Guest-NNNNNN name and a 90-day token used in the socket handshake.
+app.get('/auth/guest', process.env['NODE_ENV'] === 'test' ? (_req: Request, _res: Response, next: () => void) => next() : guestLimiter, (_req: Request, res: Response) => {
+  if (authService.getMode() === 'off') {
+    res.status(404).json({ error: 'Guest accounts are not enabled' });
+    return;
+  }
+  res.json(authService.issueGuest());
 });
 
 // Curation dry run endpoint

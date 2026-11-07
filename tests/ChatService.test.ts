@@ -861,6 +861,13 @@ describe('ChatService', () => {
       service.cleanup();
     });
 
+    it('does not count visits from guests', () => {
+      const { curation, service } = makeService();
+      service.joinChannel({ ...mockSocket, data: { verified: true, guest: true } } as Socket, { channelId: 'a/room', username: 'Guest-000001' });
+      expect(curation.recordVisit).not.toHaveBeenCalled();
+      service.cleanup();
+    });
+
     it('does not count visits from unverified sockets', () => {
       const { curation, service } = makeService();
       service.joinChannel({ ...mockSocket, data: { verified: false } } as Socket, { channelId: 'a/room', username: 'alice' });

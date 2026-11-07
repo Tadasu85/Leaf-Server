@@ -109,4 +109,47 @@ describe('Socket chat login', () => {
     await waitFor(socket, 'connect');
     expect(socket.connected).toBe(true);
   });
+  describe('guests', () => {
+    const newGuest = async () => (await request(app).get('/auth/guest')).body as { username: string; sessionToken: string };
+
+    it('hands out a guest name and token', async () => {
+      authService.setMode('required');
+      const guest = await newGuest();
+      expect(guest.username).toMatch(/^Guest-\d{6}$/);
+      expect(typeof guest.sessionToken).toBe('string');
+    });
+
+    it('has no guest accounts when chat login is off', async () => {
+      authService.setMode('off');
+      const res = await request(app).get('/auth/guest');
+      expect(res.status).toBe(404);
+    });
+
+    it('lets a guest join chat with its token', async () => {
+      authService.setMode('required');
+      const guest = await newGuest();
+      const socket = track(connect({ auth: guest }));
+      const authed = await waitFor<{ username: string }>(socket, 'authenticated');
+      expect(authed.username).toBe(guest.username);
+    });
+
+    it('refuses a made-up guest name', async () => {
+      authService.setMode('required');
+      const socket = track(connect({ auth: { username: 'Guest-123456', sessionToken: 'Guest-123456.9999999999999.00' } }));
+      const err = await waitFor<Error>(socket, 'connect_error');
+      expect(err.message).toBe('auth_failed: guest session expired');
+    });
+
+    it('limits how fast a guest can talk', async () => {
+      authService.setMode('required');
+      const guest = await newGuest();
+      const socket = track(connect({ auth: guest }));
+      await waitFor(socket, 'authenticated');
+      const errors: string[] = [];
+      socket.on('error', (e: { message: string }) => errors.push(e.message));
+      for (let i = 0; i < 10; i++) socket.emit('chatMessage', { channelId: 'raymonjohnstone/genesis-scaffold-precipice', message: `hi ${i}` });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(errors.filter((m) => m.startsWith('Guests can send'))).toHaveLength(2);
+    });
+  });
 });
