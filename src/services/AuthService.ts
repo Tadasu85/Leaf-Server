@@ -26,7 +26,7 @@ export interface AuthPayload {
 }
 
 export type AuthResult =
-  | { ok: true; username: string; sessionToken: string; method: 'signature' | 'token' }
+  | { ok: true; username: string; sessionToken: string; method: 'signature' | 'token' | 'guest' }
   | { ok: false; reason: string };
 
 /** Returns the posting public keys (STM...) for an account, or null if the account doesn't exist. */
@@ -34,9 +34,15 @@ export type PostingKeyResolver = (username: string) => Promise<string[] | null>;
 
 const CHALLENGE_PREFIX = 'leaf-chat-login';
 const USERNAME_RE = /^[a-z][a-z0-9.-]{2,15}$/;
+// Hive account names are lowercase only, so a capital G can never clash with a real account.
+const GUEST_RE = /^Guest-\d{6}$/;
 
 export function isValidHiveUsername(username: unknown): username is string {
   return typeof username === 'string' && USERNAME_RE.test(username);
+}
+
+export function isGuestName(username: unknown): username is string {
+  return typeof username === 'string' && GUEST_RE.test(username);
 }
 
 export function parseAuthMode(value: string | undefined): AuthMode {
@@ -56,6 +62,7 @@ interface AuthServiceOptions {
   hiveNode?: string;
   challengeTtlMs?: number;
   sessionTtlMs?: number;
+  guestTtlMs?: number;
   now?: () => number;
 }
 
@@ -65,6 +72,7 @@ class AuthService {
   private resolver: PostingKeyResolver;
   private readonly challengeTtlMs: number;
   private readonly sessionTtlMs: number;
+  private readonly guestTtlMs: number;
   private readonly now: () => number;
   private readonly challenges = new Map<string, IssuedChallenge>();
   private readonly keyCache = new Map<string, { keys: string[] | null; fetchedAt: number }>();
@@ -76,6 +84,7 @@ class AuthService {
     this.mode = options.mode ?? 'required';
     this.challengeTtlMs = options.challengeTtlMs ?? 2 * 60 * 1000;
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
+    this.guestTtlMs = options.guestTtlMs ?? 90 * 24 * 60 * 60 * 1000;
     this.now = options.now ?? Date.now;
     if (options.secret) {
       this.secret = Buffer.from(options.secret, 'utf8');
@@ -123,9 +132,25 @@ class AuthService {
     return { challenge, expiresAt };
   }
 
+  /**
+   * A guest identity for players without a Hive account. The name is chosen by
+   * the server and the token is the only way to use it, so guests can't pick
+   * each other's names.
+   */
+  issueGuest(): { username: string; sessionToken: string } {
+    const username = `Guest-${crypto.randomInt(0, 1_000_000).toString().padStart(6, '0')}`;
+    return { username, sessionToken: this.createSessionToken(username, this.guestTtlMs) };
+  }
+
   async authenticate(payload: AuthPayload | undefined): Promise<AuthResult> {
     const data = payload ?? {};
     const username = data.username;
+    if (isGuestName(username)) {
+      if (typeof data.sessionToken === 'string' && this.verifySessionToken(username, data.sessionToken)) {
+        return { ok: true, username, sessionToken: data.sessionToken, method: 'guest' };
+      }
+      return { ok: false, reason: 'guest session expired' };
+    }
     if (!isValidHiveUsername(username)) {
       return { ok: false, reason: 'invalid username' };
     }
@@ -173,8 +198,8 @@ class AuthService {
     return { ok: true, username, sessionToken: this.createSessionToken(username), method: 'signature' };
   }
 
-  createSessionToken(username: string): string {
-    const expiresAt = this.now() + this.sessionTtlMs;
+  createSessionToken(username: string, ttlMs: number = this.sessionTtlMs): string {
+    const expiresAt = this.now() + ttlMs;
     const body = `${username}.${expiresAt}`;
     return `${body}.${this.hmac(body)}`;
   }

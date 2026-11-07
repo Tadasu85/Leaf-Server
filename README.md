@@ -102,6 +102,17 @@ With `CHAT_AUTH=required` a connection without valid credentials gets a `connect
 with `auth_failed:`. `optional` still accepts unsigned `?username=` clients, but their room visits don't count
 towards curation and they can't rename themselves with `register`. Tests default to `off`.
 
+### Guests
+
+Players without a Hive account can look around and chat as a guest:
+
+- `GET /auth/guest` returns `{ username: "Guest-123456", sessionToken }`. The server picks the name (Hive names are
+  lowercase, so `Guest-` can never be a real account) and the token (90 days) is the only way to use it.
+  Limited to 10 guests per hour per IP. Returns 404 when `CHAT_AUTH=off`.
+- Guests connect with `auth: { username, sessionToken }` like a returning player.
+- Guests can send at most 8 chat messages or emotes a minute, their room visits never count towards curation,
+  and builder claims from guests are ignored. They can't be muted through Hive mute lists.
+
 ### WebSocket Configuration
 
 ```typescript

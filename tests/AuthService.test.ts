@@ -1,5 +1,5 @@
 import { PrivateKey, cryptoUtils } from '@hiveio/dhive';
-import AuthService, { isValidHiveUsername, parseAuthMode } from '../src/services/AuthService';
+import AuthService, { isGuestName, isValidHiveUsername, parseAuthMode } from '../src/services/AuthService';
 
 const logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as any;
 
@@ -203,6 +203,41 @@ describe('AuthService', () => {
         signature: sign(aliceKey, challenge)
       });
       expect(result).toMatchObject({ ok: true, method: 'signature' });
+    });
+  });
+  describe('guests', () => {
+    it('recognises guest names, which can never be Hive accounts', () => {
+      expect(isGuestName('Guest-004821')).toBe(true);
+      expect(isGuestName('guest-004821')).toBe(false);
+      expect(isGuestName('Guest-48')).toBe(false);
+      expect(isValidHiveUsername('Guest-004821')).toBe(false);
+    });
+
+    it('issues a guest name with a token that logs it in', async () => {
+      const { service, resolver } = makeService();
+      const guest = service.issueGuest();
+      expect(isGuestName(guest.username)).toBe(true);
+      const result = await service.authenticate({ username: guest.username, sessionToken: guest.sessionToken });
+      expect(result).toMatchObject({ ok: true, username: guest.username, method: 'guest' });
+      expect(resolver).not.toHaveBeenCalled();
+    });
+
+    it('rejects a guest name without its token', async () => {
+      const { service } = makeService();
+      const guest = service.issueGuest();
+      expect(await service.authenticate({ username: guest.username })).toEqual({ ok: false, reason: 'guest session expired' });
+      const other = service.issueGuest();
+      expect((await service.authenticate({ username: guest.username, sessionToken: other.sessionToken })).ok)
+        .toBe(other.username === guest.username);
+    });
+
+    it('keeps guest tokens for 90 days', () => {
+      const { service, advance } = makeService();
+      const guest = service.issueGuest();
+      advance(89 * 24 * 60 * 60 * 1000);
+      expect(service.verifySessionToken(guest.username, guest.sessionToken)).toBe(true);
+      advance(2 * 24 * 60 * 60 * 1000);
+      expect(service.verifySessionToken(guest.username, guest.sessionToken)).toBe(false);
     });
   });
 });
