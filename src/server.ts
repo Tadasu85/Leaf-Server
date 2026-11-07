@@ -381,6 +381,38 @@ io.on('connection', (socket) => {
   socket.on('keepaliveResponse', () => {
     chatService.handleKeepaliveResponse(socket);
   });
+  // Exit narration: the mover says which exit they used; each receiver shows
+  // the line the room's author wrote for it. No text from the mover is relayed.
+  socket.on('usedExit', async (data: { from?: unknown; to?: unknown; direction?: unknown; othersLeave?: unknown; othersArrive?: unknown }) => {
+    const mover = userService.getUserBySocket(socket.id);
+    const channelRe = /^[a-z0-9.-]{3,16}\/[a-z0-9-]{1,255}$/;
+    const from = typeof data?.from === 'string' ? data.from : '';
+    const to = typeof data?.to === 'string' ? data.to : '';
+    const direction = typeof data?.direction === 'string' ? data.direction : '';
+    if (!mover || !channelRe.test(from) || !channelRe.test(to) || !/^[a-z][a-z0-9-]{0,19}$/.test(direction)) return;
+    if (!socket.rooms.has(from)) return; // must actually be leaving that room
+    const now = Date.now();
+    const window = socket.data.exitWindow as { start: number; count: number } | undefined;
+    if (!window || now - window.start > 60000) socket.data.exitWindow = { start: now, count: 1 };
+    else if (++window.count > 30) return;
+
+    const relay = async (channelId: string, event: string, payload: Record<string, unknown>) => {
+      const receivers = await io.in(channelId).fetchSockets();
+      for (const receiver of receivers) {
+        if (receiver.id === socket.id) continue;
+        const name = userService.getUserBySocket(receiver.id);
+        if (name && await muteService.hasMuted(name, mover).catch(() => false)) continue;
+        receiver.emit(event, payload);
+      }
+    };
+    if (data?.othersLeave === true) {
+      await relay(from, 'playerUsedExit', { username: mover, channelId: from, direction });
+    }
+    if (data?.othersArrive === true) {
+      await relay(to, 'playerArrivedVia', { username: mover, channelId: to, from, direction });
+    }
+  });
+
   socket.on('keepalive', () => {
     chatService.handleKeepaliveResponse(socket);
   });
