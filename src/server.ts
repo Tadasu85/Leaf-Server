@@ -11,6 +11,7 @@ import RoomRegistry from './services/RoomRegistry';
 import { getClientIP } from './utils/clientIP';
 import BuilderService from './services/BuilderService';
 import MuteService from './services/MuteService';
+import CommunityBanService from './services/CommunityBanService';
 import AuthService, { parseAuthMode, AuthPayload, isGuestName } from './services/AuthService';
 import config from './config';
 import Logger from './utils/Logger';
@@ -142,6 +143,12 @@ if (process.env['NODE_ENV'] !== 'test') {
 const curationService = new CurationService(logger, config.game.account, postingKey, roomRegistry);
 const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
 const muteService = new MuteService(logger, config.hive.nodes[0]);
+// Players muted in the game's Hive community are banned from chat game-wide.
+const communityBans = new CommunityBanService(
+  logger,
+  process.env['GAME_COMMUNITY'] || config.game.account,
+  config.hive.nodes[0],
+);
 const chatService = new ChatService(io, logger, curationService, muteService);
 const userService = new UserService(io, logger);
 // Chat login (Keychain-signed challenge). CHAT_AUTH=required|optional|off, default required.
@@ -160,10 +167,11 @@ const cleanup = () => {
   curationService.cleanup();
   muteService.cleanup();
   authService.cleanup();
+  communityBans.cleanup();
 };
 
-// Export cleanup and authService for tests
-export { cleanup, authService };
+// Export cleanup and the services tests drive
+export { cleanup, authService, communityBans };
 
 // Error handling
 server.on('error', (error: Error) => {
@@ -179,8 +187,13 @@ io.engine.on('connection_error', (err: Error) => {
 // connect_error whose message starts with 'auth_failed:'.
 io.use((socket, next) => {
   const mode = authService.getMode();
-  if (mode === 'off') return next();
   const payload = (socket.handshake.auth ?? {}) as AuthPayload;
+  const claimed = payload.username ?? socket.handshake.query['username'];
+  if (typeof claimed === 'string' && communityBans.isBanned(claimed)) {
+    logger.info(`[CommunityBan] Refused chat for ${claimed}`);
+    return next(new Error('auth_failed: banned'));
+  }
+  if (mode === 'off') return next();
   const hasCredentials = Boolean(payload.signature || payload.sessionToken);
   if (!hasCredentials) {
     if (mode === 'optional') {
@@ -208,6 +221,25 @@ io.use((socket, next) => {
     next(new Error('auth_failed: server error'));
   });
 });
+
+// Load the community's muted list now and every 10 minutes; anyone newly
+// muted is told why and disconnected (the client doesn't reconnect after a
+// server-side disconnect).
+const kickBanned = (names: string[]) => {
+  const banned = new Set(names);
+  for (const s of io.sockets.sockets.values()) {
+    const name = (s.data.username as string | undefined) ?? s.handshake.query['username'];
+    if (typeof name === 'string' && banned.has(name.toLowerCase())) {
+      s.emit('chatBanned', { reason: 'community' });
+      s.disconnect(true);
+      logger.info(`[CommunityBan] Disconnected ${name}`);
+    }
+  }
+};
+if (process.env['NODE_ENV'] !== 'test') {
+  communityBans.start(kickBanned);
+}
+export { kickBanned };
 
 // Socket connection handling
 io.on('connection', (socket) => {
