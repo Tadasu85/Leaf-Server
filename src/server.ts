@@ -7,6 +7,8 @@ import rateLimit from 'express-rate-limit';
 import ChatService from './services/ChatService';
 import UserService from './services/UserService';
 import CurationService from './services/CurationService';
+import ChainVisitService from './services/ChainVisitService';
+import { BlockRangeMoveSource } from './services/MoveSource';
 import RoomRegistry from './services/RoomRegistry';
 import { getClientIP } from './utils/clientIP';
 import BuilderService from './services/BuilderService';
@@ -474,11 +476,36 @@ app.get('/auth/guest', process.env['NODE_ENV'] === 'test' ? (_req: Request, _res
   res.json(authService.issueGuest());
 });
 
-// Curation dry run endpoint
+// Curation counts visits from players' move_to ops on Hive (rolling 24 h),
+// not from chat joins. CURATION_VISITS=chat restores the old behaviour.
+const chainVisits = process.env['CURATION_VISITS'] === 'chat'
+  ? null
+  : new ChainVisitService(
+    logger,
+    new BlockRangeMoveSource(
+      logger,
+      [...new Set([...config.hive.nodes, 'https://api.openhive.network'])],
+      parseInt(process.env['CHAIN_VISITS_BATCH'] || '') || 200,
+    ),
+    {
+      gameId: config.game.idName,
+      isKnownRoom: (author, permlink) => roomRegistry.isKnownRoom(author, permlink),
+      isMapLoaded: () => roomRegistry.isLoaded(),
+    },
+  );
+if (chainVisits) {
+  curationService.setVisitSource(chainVisits);
+  if (process.env['NODE_ENV'] !== 'test') chainVisits.start();
+}
+export { chainVisits };
+
+// Curation dry run endpoint. `visits` shows where counts come from and what
+// reading the chain costs (blocks, MB downloaded, catch-up time).
 app.get('/curation/dryrun', (_req: Request, res: Response) => {
   const rooms = curationService.getDryRun();
   res.json({
     timestamp: new Date().toISOString(),
+    visits: chainVisits ? chainVisits.getStats() : { source: 'chat joins' },
     wouldVoteOn: rooms.slice(0, curationService.getTopN()),
     fullRanking: rooms
   });

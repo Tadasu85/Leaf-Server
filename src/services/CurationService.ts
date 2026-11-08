@@ -6,6 +6,12 @@ interface RoomScore {
   uniqueVisitors: Set<string>;
 }
 
+/** Counts from the chain (ChainVisitService). When set, chat-join visits are ignored. */
+export interface VisitSource {
+  isReady(): boolean;
+  getCounts(): { channelId: string; author: string; permlink: string; uniqueVisitors: number }[];
+}
+
 class CurationService {
   private logger: Logger;
   private client: Client;
@@ -17,6 +23,7 @@ class CurationService {
   private readonly TOP_N: number;
   private readonly VOTE_WEIGHT: number;
   private roomRegistry: RoomRegistry | null;
+  private visitSource: VisitSource | null = null;
 
   constructor(logger: Logger, gameAccount: string, postingKey: string | null, roomRegistry: RoomRegistry | null = null) {
     this.logger = logger;
@@ -42,7 +49,16 @@ class CurationService {
     return this.TOP_N;
   }
 
+  /** Count visits from the chain instead of chat joins. */
+  setVisitSource(source: VisitSource): void {
+    this.visitSource = source;
+    this.scores.clear();
+  }
+
   getDryRun(): { channelId: string; author: string; permlink: string; uniqueVisitors: number }[] {
+    if (this.visitSource) {
+      return this.visitSource.getCounts().filter(r => r.uniqueVisitors > 0);
+    }
     return Array.from(this.scores.entries())
       .map(([channelId, room]) => {
         const slashIndex = channelId.indexOf('/');
@@ -58,6 +74,7 @@ class CurationService {
   }
 
   recordVisit(channelId: string, username: string): void {
+    if (this.visitSource) return; // the chain is the record
     // Only count rooms that are in the game's map. Until the map has loaded
     // once, visits are recorded and filtered again at vote time.
     if (this.roomRegistry?.isLoaded()) {
@@ -74,7 +91,22 @@ class CurationService {
   }
 
   private async runCuration(): Promise<void> {
-    if (!this.postingKey || this.scores.size === 0) return;
+    if (!this.postingKey) return;
+    if (this.visitSource) {
+      // A rolling window: nothing to clear after voting.
+      if (!this.visitSource.isReady()) {
+        this.logger.warn('[CurationService] Chain visits still loading; skipping this round');
+        return;
+      }
+      const ranked = this.visitSource.getCounts().slice(0, this.TOP_N);
+      this.logger.info(`[CurationService] Running curation on ${ranked.length} top rooms (chain visits)`);
+      for (const { channelId, uniqueVisitors } of ranked) {
+        await this.voteRoom(channelId, uniqueVisitors);
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+      return;
+    }
+    if (this.scores.size === 0) return;
 
     const ranked = Array.from(this.scores.entries())
       .map(([channelId, room]) => ({ channelId, score: room.uniqueVisitors.size }))
