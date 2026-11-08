@@ -143,14 +143,14 @@ if (process.env['NODE_ENV'] !== 'test') {
 const curationService = new CurationService(logger, config.game.account, postingKey, roomRegistry);
 const builderService = new BuilderService(logger, config.game.account, config.game.idName, postingKey);
 const muteService = new MuteService(logger, config.hive.nodes[0]);
+const chatService = new ChatService(io, logger, curationService, muteService);
+const userService = new UserService(io, logger);
 // Players muted in the game's Hive community are banned from chat game-wide.
 const communityBans = new CommunityBanService(
   logger,
   process.env['GAME_COMMUNITY'] || config.game.account,
   config.hive.nodes[0],
 );
-const chatService = new ChatService(io, logger, curationService, muteService);
-const userService = new UserService(io, logger);
 // Chat login (Keychain-signed challenge). CHAT_AUTH=required|optional|off, default required.
 // Tests default to off so the existing suites can connect with ?username=.
 const authService = new AuthService(logger, {
@@ -167,11 +167,10 @@ const cleanup = () => {
   curationService.cleanup();
   muteService.cleanup();
   authService.cleanup();
-  communityBans.cleanup();
 };
 
-// Export cleanup and the services tests drive
-export { cleanup, authService, communityBans };
+// Export cleanup and authService for tests
+export { cleanup, authService };
 
 // Error handling
 server.on('error', (error: Error) => {
@@ -239,7 +238,8 @@ const kickBanned = (names: string[]) => {
 if (process.env['NODE_ENV'] !== 'test') {
   communityBans.start(kickBanned);
 }
-export { kickBanned };
+// communityBans' timer only runs outside tests, so cleanup() needn't stop it.
+export { kickBanned, communityBans };
 
 // Socket connection handling
 io.on('connection', (socket) => {
