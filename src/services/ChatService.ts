@@ -162,6 +162,11 @@ class ChatService implements ChatServiceInterface {
     }
   }
 
+  /** The room channel a user is in, if any (players are in one at a time). */
+  getChannelForUser(username: string): string | undefined {
+    return this.getChannelsForUser(username)[0];
+  }
+
   // Get all channels a user is in
   private getChannelsForUser(username: string): string[] {
     const channels: string[] = [];

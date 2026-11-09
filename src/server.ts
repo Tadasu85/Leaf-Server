@@ -249,6 +249,9 @@ if (process.env['NODE_ENV'] !== 'test') {
 // communityBans' timer only runs outside tests, so cleanup() needn't stop it.
 export { kickBanned, communityBans };
 
+// Players who chose to show their room in `who` (see setWhereVisible).
+const whereVisible = new Map<string, string>(); // username -> socket id that set it
+
 // Socket connection handling
 io.on('connection', (socket) => {
   // A verified socket's name comes from its signature or token; the query
@@ -389,7 +392,8 @@ io.on('connection', (socket) => {
   socket.on('page', (data) => { void handlePrivateMessage('page', data); });
   socket.on('whisper', (data) => { void handlePrivateMessage('whisper', data); });
 
-  // who: everyone online, minus admins and anyone the asker has muted on Hive
+  // who: everyone online, minus admins and anyone the asker has muted on Hive.
+  // Rooms are listed only for players who turned `where on`.
   socket.on('who', async () => {
     const asker = userService.getUserBySocket(socket.id);
     if (!asker) return;
@@ -397,7 +401,30 @@ io.on('connection', (socket) => {
     const players = userService.filterAdminAccounts(userService.getOnlineUsers())
       .filter(u => !muted.has(u))
       .sort((a, b) => a.localeCompare(b));
-    socket.emit('whoList', { players });
+    const locations: Record<string, string> = {};
+    for (const name of players) {
+      if (!whereVisible.has(name)) continue;
+      const channel = chatService.getChannelForUser(name);
+      if (channel) locations[name] = channel;
+    }
+    socket.emit('whoList', { players, locations });
+  });
+
+  // where on/off: whether `who` shows this player's room. The client keeps
+  // the choice and sends it again on every connect; the server forgets it
+  // when the player disconnects.
+  socket.on('setWhereVisible', (data: { visible?: unknown }) => {
+    const name = userService.getUserBySocket(socket.id);
+    if (!name || typeof data?.visible !== 'boolean') return;
+    if (data.visible) whereVisible.set(name, socket.id);
+    else whereVisible.delete(name);
+    socket.emit('whereVisibleSet', { visible: data.visible });
+  });
+  socket.on('disconnect', () => {
+    // Only the choice made on this socket (not one made after a reconnect).
+    for (const [name, id] of whereVisible) {
+      if (id === socket.id) whereVisible.delete(name);
+    }
   });
 
   socket.on('leaveChatChannel', (data: LeaveChatChannelData) => {
